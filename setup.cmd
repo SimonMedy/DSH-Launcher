@@ -3,7 +3,7 @@ setlocal
 title DSH Launcher - Setup
 
 set "PROJECT=%~dp0src\DSHLauncher\DSHLauncher.csproj"
-set "INSTALL_DIR=%LOCALAPPDATA%\DSHLauncher\app"
+set "INSTALL_DIR=%~dp0dist"
 set "EXE=%INSTALL_DIR%\DSHLauncher.exe"
 
 echo DSH Launcher setup
