@@ -6,5 +6,11 @@ Desktop.ini
 .vscode/
 .idea/
 
+# .NET
+**/bin/
+**/obj/
+*.user
+*.suo
+
 # Local logs
 *.log
