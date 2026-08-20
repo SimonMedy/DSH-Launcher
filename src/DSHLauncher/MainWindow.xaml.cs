@@ -15,6 +15,12 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         LoadHighResIcon();
+        ContentGrid.SizeChanged += (_, _) =>
+        {
+            ContentGrid.Clip = new RectangleGeometry(
+                new Rect(0, 0, ContentGrid.ActualWidth, ContentGrid.ActualHeight),
+                18, 18);
+        };
         _harness = harness;
         _harness.StateChanged += Harness_StateChanged;
         UpdateState(_harness.State);
@@ -38,11 +44,11 @@ public partial class MainWindow : Window
         var workTopLeft = transform.Transform(new System.Windows.Point(screen.WorkingArea.Left, screen.WorkingArea.Top));
         var workBottomRight = transform.Transform(new System.Windows.Point(screen.WorkingArea.Right, screen.WorkingArea.Bottom));
 
-        var desiredLeft = cursorDip.X - ActualWidth + 28;
-        var desiredTop = cursorDip.Y - ActualHeight - 12;
+        var desiredLeft = cursorDip.X - ActualWidth + 40;
+        var desiredTop = cursorDip.Y - ActualHeight;
 
-        Left = Math.Clamp(desiredLeft, workTopLeft.X + 8, workBottomRight.X - ActualWidth - 8);
-        Top = Math.Clamp(desiredTop, workTopLeft.Y + 8, workBottomRight.Y - ActualHeight - 8);
+        Left = Math.Clamp(desiredLeft, workTopLeft.X - 4, workBottomRight.X - ActualWidth + 4);
+        Top = Math.Clamp(desiredTop, workTopLeft.Y - 4, workBottomRight.Y - ActualHeight + 4);
 
         Activate();
     }

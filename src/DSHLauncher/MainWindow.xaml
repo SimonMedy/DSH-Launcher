@@ -2,8 +2,8 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="DeepSeek Harness"
-        Width="338"
-        Height="390"
+        Width="362"
+        Height="414"
         WindowStyle="None"
         ResizeMode="NoResize"
         AllowsTransparency="True"
@@ -61,215 +61,219 @@
         </Style>
     </Window.Resources>
 
-    <Border CornerRadius="18"
-            BorderThickness="1"
-            BorderBrush="#31566F"
-            SnapsToDevicePixels="True">
-        <Border.Effect>
-            <DropShadowEffect BlurRadius="26"
-                              ShadowDepth="8"
-                              Direction="270"
-                              Opacity="0.48"
-                              Color="#000A12"/>
-        </Border.Effect>
+    <Grid Margin="12">
+        <Border x:Name="CardBorder"
+                CornerRadius="18"
+                BorderThickness="1"
+                BorderBrush="#31566F"
+                SnapsToDevicePixels="True">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="20"
+                                  ShadowDepth="6"
+                                  Direction="270"
+                                  Opacity="0.45"
+                                  Color="#000A12"/>
+            </Border.Effect>
 
-        <Border.Background>
-            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                <GradientStop Color="#111A27" Offset="0"/>
-                <GradientStop Color="#0B1C2B" Offset="0.50"/>
-                <GradientStop Color="#071723" Offset="1"/>
-            </LinearGradientBrush>
-        </Border.Background>
+            <Grid x:Name="ContentGrid">
+                <Grid.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                        <GradientStop Color="#111A27" Offset="0"/>
+                        <GradientStop Color="#0B1C2B" Offset="0.50"/>
+                        <GradientStop Color="#071723" Offset="1"/>
+                    </LinearGradientBrush>
+                </Grid.Background>
 
-        <Grid ClipToBounds="True">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="104"/>
-                <RowDefinition Height="1"/>
-                <RowDefinition Height="*"/>
-                <RowDefinition Height="1"/>
-                <RowDefinition Height="56"/>
-            </Grid.RowDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="104"/>
+                    <RowDefinition Height="1"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="1"/>
+                    <RowDefinition Height="56"/>
+                </Grid.RowDefinitions>
 
-            <!-- subtle deep-sea glow -->
-            <Ellipse Width="230"
-                     Height="230"
-                     HorizontalAlignment="Right"
-                     VerticalAlignment="Top"
-                     Margin="0,-145,-105,0"
-                     IsHitTestVisible="False">
-                <Ellipse.Fill>
-                    <RadialGradientBrush>
-                        <GradientStop Color="#6058A6FF" Offset="0"/>
-                        <GradientStop Color="#0058A6FF" Offset="1"/>
-                    </RadialGradientBrush>
-                </Ellipse.Fill>
-            </Ellipse>
+                <!-- vibrant deep-sea glow (top-right cyan) -->
+                <Ellipse Width="230"
+                         Height="230"
+                         HorizontalAlignment="Right"
+                         VerticalAlignment="Top"
+                         Margin="0,-145,-105,0"
+                         IsHitTestVisible="False">
+                    <Ellipse.Fill>
+                        <RadialGradientBrush>
+                            <GradientStop Color="#6058A6FF" Offset="0"/>
+                            <GradientStop Color="#0058A6FF" Offset="1"/>
+                        </RadialGradientBrush>
+                    </Ellipse.Fill>
+                </Ellipse>
 
-            <Ellipse Width="140"
-                     Height="140"
-                     HorizontalAlignment="Left"
-                     VerticalAlignment="Bottom"
-                     Margin="-78,0,0,-86"
-                     Grid.Row="2"
-                     IsHitTestVisible="False">
-                <Ellipse.Fill>
-                    <RadialGradientBrush>
-                        <GradientStop Color="#354D6BFE" Offset="0"/>
-                        <GradientStop Color="#004D6BFE" Offset="1"/>
-                    </RadialGradientBrush>
-                </Ellipse.Fill>
-            </Ellipse>
+                <!-- vibrant deep-sea glow (bottom-left indigo) -->
+                <Ellipse Width="140"
+                         Height="140"
+                         HorizontalAlignment="Left"
+                         VerticalAlignment="Bottom"
+                         Margin="-78,0,0,-86"
+                         Grid.Row="2"
+                         IsHitTestVisible="False">
+                    <Ellipse.Fill>
+                        <RadialGradientBrush>
+                            <GradientStop Color="#354D6BFE" Offset="0"/>
+                            <GradientStop Color="#004D6BFE" Offset="1"/>
+                        </RadialGradientBrush>
+                    </Ellipse.Fill>
+                </Ellipse>
 
-            <!-- header -->
-            <Grid Grid.Row="0" Margin="20,16,18,12">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="52"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-
-                <Border Width="42"
-                        Height="42"
-                        CornerRadius="12"
-                        Background="#132C43"
-                        BorderBrush="#2A5878"
-                        BorderThickness="1"
-                        HorizontalAlignment="Left"
-                        VerticalAlignment="Top">
-                    <Image x:Name="AppIconImage"
-                           Source="/DeepSeekHarness.ico"
-                           Width="30"
-                           Height="30"
-                           RenderOptions.BitmapScalingMode="HighQuality"
-                           SnapsToDevicePixels="True"
-                           UseLayoutRounding="True"
-                           Stretch="Uniform"
-                           HorizontalAlignment="Center"
-                           VerticalAlignment="Center"/>
-                </Border>
-
-                <StackPanel Grid.Column="1" VerticalAlignment="Top">
-                    <TextBlock Text="DeepSeek Harness"
-                               Foreground="{StaticResource TextPrimary}"
-                               FontFamily="{StaticResource UiFont}"
-                               FontSize="16"
-                               FontWeight="SemiBold"/>
-
-                    <StackPanel Orientation="Horizontal" Margin="0,7,0,0">
-                        <Ellipse x:Name="StatusDot"
-                                 Width="8"
-                                 Height="8"
-                                 Fill="#6F8A9D"
-                                 Margin="0,1,7,0"/>
-                        <TextBlock x:Name="StatusText"
-                                   Text="Starting"
-                                   Foreground="{StaticResource TextSecondary}"
-                                   FontFamily="{StaticResource UiFont}"
-                                   FontSize="12"/>
-                        <TextBlock Text="  ·  127.0.0.1:3080"
-                                   Foreground="#647B8F"
-                                   FontFamily="{StaticResource UiFont}"
-                                   FontSize="12"/>
-                    </StackPanel>
-                </StackPanel>
-            </Grid>
-
-            <Border Grid.Row="1" Background="{StaticResource Separator}" Opacity="0.72"/>
-
-            <!-- actions -->
-            <StackPanel Grid.Row="2" Margin="10,10,10,8">
-                <Button x:Name="OpenButton"
-                        Style="{StaticResource ActionButtonStyle}"
-                        Click="OpenButton_Click">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="32"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="↗"
-                                   Foreground="{StaticResource Accent}"
-                                   FontSize="18"
-                                   VerticalAlignment="Center"/>
-                        <TextBlock Grid.Column="1"
-                                   Text="Open DeepSeek Harness"
-                                   VerticalAlignment="Center"/>
-                    </Grid>
-                </Button>
-
-                <Button Style="{StaticResource ActionButtonStyle}"
-                        Click="HarnessLogsButton_Click">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="32"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="≡"
-                                   Foreground="#8CC6F7"
-                                   FontSize="19"
-                                   VerticalAlignment="Center"/>
-                        <TextBlock Grid.Column="1"
-                                   Text="Open Harness Logs"
-                                   VerticalAlignment="Center"/>
-                    </Grid>
-                </Button>
-
-                <Button Style="{StaticResource ActionButtonStyle}"
-                        Click="LauncherLogsButton_Click">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="32"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="⌁"
-                                   Foreground="#8CC6F7"
-                                   FontSize="20"
-                                   VerticalAlignment="Center"/>
-                        <TextBlock Grid.Column="1"
-                                   Text="Open Launcher Logs"
-                                   VerticalAlignment="Center"/>
-                    </Grid>
-                </Button>
-
-                <Button x:Name="RestartButton"
-                        Style="{StaticResource ActionButtonStyle}"
-                        Click="RestartButton_Click">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="32"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="↻"
-                                   Foreground="{StaticResource Accent}"
-                                   FontSize="19"
-                                   VerticalAlignment="Center"/>
-                        <TextBlock Grid.Column="1"
-                                   Text="Restart DeepSeek Harness"
-                                   VerticalAlignment="Center"/>
-                    </Grid>
-                </Button>
-            </StackPanel>
-
-            <Border Grid.Row="3" Background="{StaticResource Separator}" Opacity="0.72"/>
-
-            <!-- exit -->
-            <Button Grid.Row="4"
-                    Margin="10,4,10,4"
-                    Style="{StaticResource ActionButtonStyle}"
-                    Click="StopButton_Click">
-                <Grid>
+                <!-- header -->
+                <Grid Grid.Row="0" Margin="20,16,18,12">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="32"/>
+                        <ColumnDefinition Width="52"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock Text="×"
-                               Foreground="{StaticResource Danger}"
-                               FontSize="22"
+
+                    <Border Width="42"
+                            Height="42"
+                            CornerRadius="12"
+                            Background="#132C43"
+                            BorderBrush="#2A5878"
+                            BorderThickness="1"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Top">
+                        <Image x:Name="AppIconImage"
+                               Source="/DeepSeekHarness.ico"
+                               Width="30"
+                               Height="30"
+                               RenderOptions.BitmapScalingMode="HighQuality"
+                               SnapsToDevicePixels="True"
+                               UseLayoutRounding="True"
+                               Stretch="Uniform"
+                               HorizontalAlignment="Center"
                                VerticalAlignment="Center"/>
-                    <TextBlock Grid.Column="1"
-                               Text="Stop DeepSeek Harness"
-                               Foreground="#FFD6DC"
-                               VerticalAlignment="Center"/>
+                    </Border>
+
+                    <StackPanel Grid.Column="1" VerticalAlignment="Top">
+                        <TextBlock Text="DeepSeek Harness"
+                                   Foreground="{StaticResource TextPrimary}"
+                                   FontFamily="{StaticResource UiFont}"
+                                   FontSize="16"
+                                   FontWeight="SemiBold"/>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,7,0,0">
+                            <Ellipse x:Name="StatusDot"
+                                     Width="8"
+                                     Height="8"
+                                     Fill="#6F8A9D"
+                                     Margin="0,1,7,0"/>
+                            <TextBlock x:Name="StatusText"
+                                       Text="Starting"
+                                       Foreground="{StaticResource TextSecondary}"
+                                       FontFamily="{StaticResource UiFont}"
+                                       FontSize="12"/>
+                            <TextBlock Text="  ·  127.0.0.1:3080"
+                                       Foreground="#647B8F"
+                                       FontFamily="{StaticResource UiFont}"
+                                       FontSize="12"/>
+                        </StackPanel>
+                    </StackPanel>
                 </Grid>
-            </Button>
-        </Grid>
-    </Border>
+
+                <Border Grid.Row="1" Background="{StaticResource Separator}" Opacity="0.72"/>
+
+                <!-- actions -->
+                <StackPanel Grid.Row="2" Margin="10,10,10,8">
+                    <Button x:Name="OpenButton"
+                            Style="{StaticResource ActionButtonStyle}"
+                            Click="OpenButton_Click">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="32"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="↗"
+                                       Foreground="{StaticResource Accent}"
+                                       FontSize="18"
+                                       VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1"
+                                       Text="Open DeepSeek Harness"
+                                       VerticalAlignment="Center"/>
+                        </Grid>
+                    </Button>
+
+                    <Button Style="{StaticResource ActionButtonStyle}"
+                            Click="HarnessLogsButton_Click">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="32"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="≡"
+                                       Foreground="#8CC6F7"
+                                       FontSize="19"
+                                       VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1"
+                                       Text="Open Harness Logs"
+                                       VerticalAlignment="Center"/>
+                        </Grid>
+                    </Button>
+
+                    <Button Style="{StaticResource ActionButtonStyle}"
+                            Click="LauncherLogsButton_Click">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="32"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="⌁"
+                                       Foreground="#8CC6F7"
+                                       FontSize="20"
+                                       VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1"
+                                       Text="Open Launcher Logs"
+                                       VerticalAlignment="Center"/>
+                        </Grid>
+                    </Button>
+
+                    <Button x:Name="RestartButton"
+                            Style="{StaticResource ActionButtonStyle}"
+                            Click="RestartButton_Click">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="32"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="↻"
+                                       Foreground="{StaticResource Accent}"
+                                       FontSize="19"
+                                       VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1"
+                                       Text="Restart DeepSeek Harness"
+                                       VerticalAlignment="Center"/>
+                        </Grid>
+                    </Button>
+                </StackPanel>
+
+                <Border Grid.Row="3" Background="{StaticResource Separator}" Opacity="0.72"/>
+
+                <!-- exit -->
+                <Button Grid.Row="4"
+                        Margin="10,4,10,4"
+                        Style="{StaticResource ActionButtonStyle}"
+                        Click="StopButton_Click">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="32"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="×"
+                                   Foreground="{StaticResource Danger}"
+                                   FontSize="22"
+                                   VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1"
+                                   Text="Stop DeepSeek Harness"
+                                   Foreground="#FFD6DC"
+                                   VerticalAlignment="Center"/>
+                    </Grid>
+                </Button>
+            </Grid>
+        </Border>
+    </Grid>
 </Window>
