@@ -115,6 +115,8 @@ public sealed class HarnessService : IDisposable
 
         try
         {
+            KillProcessOnPort(3080);
+
             if (!_process.Start())
             {
                 throw new InvalidOperationException("Windows could not start the Harness process.");
@@ -161,12 +163,64 @@ public sealed class HarnessService : IDisposable
         }
 
         _stopping = true;
-        LogLauncher($"Stopping Harness process tree (PID {_process.Id}).");
+        var pid = _process.Id;
+        LogLauncher($"Stopping Harness process tree (PID {pid}).");
 
         try
         {
-            _process.Kill(entireProcessTree: true);
-            await _process.WaitForExitAsync();
+            try
+            {
+                _process.CancelOutputRead();
+                _process.CancelErrorRead();
+            }
+            catch
+            {
+                // Ignore if stream reading is not active.
+            }
+
+            // On Windows, taskkill /PID <pid> /T /F is the most reliable way to terminate cmd -> npx -> node tree
+            try
+            {
+                using var killProcess = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "taskkill.exe",
+                    Arguments = $"/PID {pid} /T /F",
+                    CreateNoWindow = true,
+                    UseShellExecute = false
+                });
+
+                if (killProcess is not null)
+                {
+                    using var killTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                    await killProcess.WaitForExitAsync(killTimeout.Token);
+                }
+            }
+            catch (Exception ex)
+            {
+                LogLauncher($"taskkill failed: {ex.Message}");
+            }
+
+            try
+            {
+                if (!_process.HasExited)
+                {
+                    _process.Kill(entireProcessTree: true);
+                }
+            }
+            catch
+            {
+                // Process may have already exited via taskkill.
+            }
+
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            try
+            {
+                await _process.WaitForExitAsync(timeoutCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                LogLauncher("WaitForExitAsync timed out, proceeding.");
+            }
         }
         catch (Exception ex)
         {
@@ -174,10 +228,21 @@ public sealed class HarnessService : IDisposable
         }
         finally
         {
-            _process.Dispose();
+            try
+            {
+                _process.Dispose();
+            }
+            catch
+            {
+                // Ignore disposal errors.
+            }
+
+            KillProcessOnPort(3080);
+
             _process = null;
             _stopping = false;
             SetState(HarnessState.Stopped);
+            LogLauncher("Harness stopped successfully.");
         }
     }
 
@@ -309,7 +374,26 @@ public sealed class HarnessService : IDisposable
         {
             try
             {
-                _process.Kill(entireProcessTree: true);
+                using var kill = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "taskkill.exe",
+                    Arguments = $"/PID {_process.Id} /T /F",
+                    CreateNoWindow = true,
+                    UseShellExecute = false
+                });
+                kill?.WaitForExit(2000);
+            }
+            catch
+            {
+                // Best effort during shutdown.
+            }
+
+            try
+            {
+                if (!_process.HasExited)
+                {
+                    _process.Kill(entireProcessTree: true);
+                }
             }
             catch
             {
@@ -319,6 +403,27 @@ public sealed class HarnessService : IDisposable
 
         _process?.Dispose();
         _httpClient.Dispose();
+        KillProcessOnPort(3080);
         LogLauncher("WPF launcher stopped.");
+    }
+
+    private static void KillProcessOnPort(int port)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = $"/c for /f \"tokens=5\" %a in ('netstat -ano -p tcp ^| findstr \":{port}\" ^| findstr \"LISTENING\"') do @taskkill /PID %a /F /T",
+                CreateNoWindow = true,
+                UseShellExecute = false
+            };
+            using var proc = Process.Start(psi);
+            proc?.WaitForExit(2000);
+        }
+        catch
+        {
+            // Ignore port cleanup errors.
+        }
     }
 }

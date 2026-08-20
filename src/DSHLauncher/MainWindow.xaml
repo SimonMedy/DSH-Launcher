@@ -11,6 +11,8 @@
         ShowInTaskbar="False"
         Topmost="True"
         SizeToContent="Manual"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
         Deactivated="Window_Deactivated">
 
     <Window.Resources>
@@ -133,9 +135,13 @@
                         BorderThickness="1"
                         HorizontalAlignment="Left"
                         VerticalAlignment="Top">
-                    <Image Source="/DeepSeekHarness.ico"
-                           Width="31"
-                           Height="31"
+                    <Image x:Name="AppIconImage"
+                           Source="/DeepSeekHarness.ico"
+                           Width="30"
+                           Height="30"
+                           RenderOptions.BitmapScalingMode="HighQuality"
+                           SnapsToDevicePixels="True"
+                           UseLayoutRounding="True"
                            Stretch="Uniform"
                            HorizontalAlignment="Center"
                            VerticalAlignment="Center"/>

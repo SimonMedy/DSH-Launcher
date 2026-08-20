@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using DSHLauncher.Services;
 using Forms = System.Windows.Forms;
 
@@ -13,6 +14,7 @@ public partial class MainWindow : Window
     public MainWindow(HarnessService harness)
     {
         InitializeComponent();
+        LoadHighResIcon();
         _harness = harness;
         _harness.StateChanged += Harness_StateChanged;
         UpdateState(_harness.State);
@@ -130,11 +132,11 @@ public partial class MainWindow : Window
         }
 
         _actionInProgress = true;
+        Hide();
 
         try
         {
             await _harness.StopAsync();
-            System.Windows.Application.Current.Shutdown();
         }
         catch (Exception ex)
         {
@@ -144,6 +146,28 @@ public partial class MainWindow : Window
                 "DSH Launcher",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
+            return;
+        }
+
+        System.Windows.Application.Current.Shutdown();
+    }
+
+    private void LoadHighResIcon()
+    {
+        try
+        {
+            var uri = new Uri("pack://application:,,,/DeepSeekHarness.ico", UriKind.Absolute);
+            var decoder = new IconBitmapDecoder(uri, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+            var highResFrame = decoder.Frames.OrderByDescending(f => f.PixelWidth).FirstOrDefault();
+            if (highResFrame is not null)
+            {
+                AppIconImage.Source = highResFrame;
+            }
+        }
+        catch
+        {
+            // Keep default XAML source on failure
         }
     }
 }
+
