@@ -1,10 +1,23 @@
 # DSH Launcher
 
+<p align="left">
+  <a href="https://github.com/SimonMedy/DSH-Launcher/releases"><img src="https://img.shields.io/github/v/release/SimonMedy/DSH-Launcher?color=4D6BFE&style=flat-square" alt="GitHub Release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-6799FE?style=flat-square" alt="License" /></a>
+  <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-1A1D24?style=flat-square" alt="Platform" />
+  <img src="https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square" alt=".NET" />
+</p>
+
 An unofficial community Windows system tray launcher for DeepSeek Harness.
 
 This project is not affiliated with or endorsed by DeepSeek.
 
 It starts DeepSeek Harness silently in the background, opens the local web interface when ready, and provides a modern DeepSea WPF popup interface from the system tray with remote access configuration for [DSH-Mobile](https://github.com/SimonMedy/DSH-Mobile).
+
+<p align="center">
+  <img src="assets/dsh-launcher-preview.png" alt="DSH Launcher Demo" width="300" />
+</p>
+
+---
 
 ## Features
 
@@ -104,6 +117,7 @@ launcher.log
 ```text
 .
 ├── README.md
+├── LICENSE
 ├── setup.cmd
 ├── .gitignore
 ├── src/
@@ -116,12 +130,13 @@ launcher.log
 │           ├── ConfigService.cs
 │           └── HarnessService.cs
 └── assets/
-    └── DeepSeekHarness.ico
+    ├── DeepSeekHarness.ico
+    └── dsh-launcher-preview.png
 ```
 
 - `setup.cmd` builds the WPF app to `dist/` and creates the desktop shortcut.
 - `src/DSHLauncher` contains the modern WPF tray application code.
-- `assets/` contains the high-resolution application icon.
+- `assets/` contains the application icon and visual assets.
 
 ## Notes
 
