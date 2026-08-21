@@ -23,6 +23,7 @@ public partial class MainWindow : Window
         };
         _harness = harness;
         _harness.StateChanged += Harness_StateChanged;
+        _harness.StatusMessageChanged += Harness_StatusMessageChanged;
         UpdateState(_harness.State);
     }
 
@@ -58,9 +59,17 @@ public partial class MainWindow : Window
         Dispatcher.Invoke(() => UpdateState(state));
     }
 
+    private void Harness_StatusMessageChanged(object? sender, string message)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            StatusText.Text = message;
+        });
+    }
+
     private void UpdateState(HarnessState state)
     {
-        StatusText.Text = state.ToString();
+        StatusText.Text = _harness.StatusMessage;
 
         StatusDot.Fill = state switch
         {
@@ -70,8 +79,12 @@ public partial class MainWindow : Window
             _ => new SolidColorBrush(System.Windows.Media.Color.FromRgb(111, 138, 157))
         };
 
+        var isBusy = _actionInProgress || state == HarnessState.Starting;
+
         OpenButton.IsEnabled = state == HarnessState.Running;
-        RestartButton.IsEnabled = !_actionInProgress;
+        UpdateButton.IsEnabled = !isBusy;
+        RestartButton.IsEnabled = !isBusy;
+        SettingsButton.IsEnabled = !isBusy;
     }
 
     private void Window_Deactivated(object sender, EventArgs e)
@@ -98,6 +111,68 @@ public partial class MainWindow : Window
     {
         _harness.OpenLauncherLogs();
         Hide();
+    }
+
+    private async void SettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        Hide();
+        var settingsWindow = new SettingsWindow(_harness.Config);
+        if (settingsWindow.ShowDialog() == true)
+        {
+            if (!_actionInProgress)
+            {
+                _actionInProgress = true;
+                RestartButton.IsEnabled = false;
+                UpdateButton.IsEnabled = false;
+
+                try
+                {
+                    await _harness.RestartAsync();
+                }
+                catch (Exception ex)
+                {
+                    System.Windows.MessageBox.Show(
+                        $"DeepSeek Harness could not be restarted with the new settings.\n\n{ex.Message}",
+                        "DSH Launcher",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                }
+                finally
+                {
+                    _actionInProgress = false;
+                    UpdateState(_harness.State);
+                }
+            }
+        }
+    }
+
+    private async void UpdateButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_actionInProgress)
+        {
+            return;
+        }
+
+        _actionInProgress = true;
+        UpdateState(_harness.State);
+
+        try
+        {
+            await _harness.UpdateAsync();
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(
+                $"DeepSeek Harness could not be updated.\n\n{ex.Message}",
+                "DSH Launcher",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+        finally
+        {
+            _actionInProgress = false;
+            UpdateState(_harness.State);
+        }
     }
 
     private async void RestartButton_Click(object sender, RoutedEventArgs e)
@@ -132,27 +207,15 @@ public partial class MainWindow : Window
 
     private async void StopButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_actionInProgress)
-        {
-            return;
-        }
-
-        _actionInProgress = true;
         Hide();
 
         try
         {
             await _harness.StopAsync();
         }
-        catch (Exception ex)
+        catch
         {
-            _actionInProgress = false;
-            System.Windows.MessageBox.Show(
-                $"DeepSeek Harness could not be stopped.\n\n{ex.Message}",
-                "DSH Launcher",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
-            return;
+            // Ignore error to ensure shutdown proceeds
         }
 
         System.Windows.Application.Current.Shutdown();

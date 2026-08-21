@@ -60,12 +60,25 @@ public partial class App : System.Windows.Application
                 {
                     if (_trayIcon is not null)
                     {
-                        _trayIcon.Text = $"DeepSeek Harness - {state}";
+                        var text = $"DeepSeek Harness - {_harness.StatusMessage}";
+                        _trayIcon.Text = text.Length > 63 ? text[..63] : text;
                     }
                 });
             };
 
-            await _harness.StartAsync(openBrowserWhenReady: true);
+            _harness.StatusMessageChanged += (_, msg) =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    if (_trayIcon is not null)
+                    {
+                        var text = $"DeepSeek Harness - {msg}";
+                        _trayIcon.Text = text.Length > 63 ? text[..63] : text;
+                    }
+                });
+            };
+
+            await _harness.StartAsync(openBrowserWhenReady: false);
         }
         catch (Exception ex)
         {

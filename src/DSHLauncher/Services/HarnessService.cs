@@ -27,14 +27,21 @@ public sealed class HarnessService : IDisposable
     private readonly string _harnessLog;
     private readonly string _harnessErrorLog;
 
+    private readonly SemaphoreSlim _actionLock = new(1, 1);
     private Process? _process;
+    private Process? _installProcess;
     private CancellationTokenSource? _monitorCts;
     private bool _stopping;
     private bool _disposed;
 
     public HarnessState State { get; private set; } = HarnessState.Stopped;
 
+    public string StatusMessage { get; private set; } = "Starting";
+
+    public ConfigService Config { get; } = new();
+
     public event EventHandler<HarnessState>? StateChanged;
+    public event EventHandler<string>? StatusMessageChanged;
 
     public HarnessService()
     {
@@ -52,6 +59,140 @@ public sealed class HarnessService : IDisposable
         LogLauncher("WPF launcher starting.");
     }
 
+    public async Task UpdateAsync()
+    {
+        ThrowIfDisposed();
+        if (!await _actionLock.WaitAsync(0))
+        {
+            return;
+        }
+
+        try
+        {
+            await InstallOrUpdateHarnessAsync(isUpdate: true);
+        }
+        finally
+        {
+            _actionLock.Release();
+        }
+    }
+
+    public bool IsDshInstalled()
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
+                Arguments = "/d /s /c \"where.exe dsh\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            using var proc = Process.Start(psi);
+            if (proc is null) return false;
+            proc.WaitForExit(1000);
+            return proc.ExitCode == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private async Task InstallOrUpdateHarnessAsync(bool isUpdate)
+    {
+        var actionName = isUpdate ? "Updating" : "Installing";
+        LogLauncher($"{actionName} DeepSeek Harness globally via npm...");
+
+        if (_process is { HasExited: false })
+        {
+            await StopAsync();
+        }
+
+        SetState(HarnessState.Starting);
+        UpdateStatusMessage(isUpdate ? "Updating DeepSeek Harness..." : "Installing DeepSeek Harness...");
+
+        AppendLine(_harnessLog, string.Empty);
+        AppendLine(_harnessLog, new string('=', 64));
+        AppendLine(_harnessLog, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {actionName} DeepSeek Harness: npm install -g @deepseek-ai/dsh@latest");
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
+            Arguments = "/d /s /c \"npm install -g @deepseek-ai/dsh@latest\"",
+            WorkingDirectory = AppContext.BaseDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        using var proc = new Process { StartInfo = psi };
+        proc.OutputDataReceived += (_, args) =>
+        {
+            if (args.Data is not null)
+            {
+                AppendLine(_harnessLog, args.Data);
+            }
+        };
+        proc.ErrorDataReceived += (_, args) =>
+        {
+            if (args.Data is not null)
+            {
+                AppendLine(_harnessErrorLog, args.Data);
+            }
+        };
+
+        _installProcess = proc;
+
+        try
+        {
+            proc.Start();
+            proc.BeginOutputReadLine();
+            proc.BeginErrorReadLine();
+            await proc.WaitForExitAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            LogLauncher($"{actionName} cancelled.");
+            return;
+        }
+        catch (Exception ex)
+        {
+            if (_stopping)
+            {
+                return;
+            }
+
+            LogLauncher($"Error executing npm install: {ex.Message}");
+            SetState(HarnessState.Failed);
+            UpdateStatusMessage("Install failed");
+            throw;
+        }
+        finally
+        {
+            _installProcess = null;
+        }
+
+        if (_stopping)
+        {
+            return;
+        }
+
+        if (proc.ExitCode != 0)
+        {
+            LogLauncher($"npm install failed with exit code {proc.ExitCode}.");
+            SetState(HarnessState.Failed);
+            UpdateStatusMessage("Install failed");
+            throw new InvalidOperationException($"npm install failed with exit code {proc.ExitCode}. Check harness-error.log for details.");
+        }
+
+        LogLauncher($"DeepSeek Harness {(isUpdate ? "updated" : "installed")} successfully.");
+        await StartAsync(openBrowserWhenReady: !isUpdate);
+    }
+
     public async Task StartAsync(bool openBrowserWhenReady = false)
     {
         ThrowIfDisposed();
@@ -61,17 +202,45 @@ public sealed class HarnessService : IDisposable
             return;
         }
 
+        if (!IsDshInstalled())
+        {
+            LogLauncher("DeepSeek Harness not found globally. Running initial install...");
+            await InstallOrUpdateHarnessAsync(isUpdate: false);
+            return;
+        }
+
         _stopping = false;
         SetState(HarnessState.Starting);
+        UpdateStatusMessage("Starting");
+
+        var config = Config.Load();
+        var baseExe = IsDshInstalled() ? "dsh web" : "npx --yes @deepseek-ai/dsh web";
+        var cmdBuilder = new System.Text.StringBuilder(baseExe);
+
+        if (config.TrustedHosts is { Count: > 0 })
+        {
+            foreach (var host in config.TrustedHosts.Where(h => !string.IsNullOrWhiteSpace(h)))
+            {
+                cmdBuilder.Append($" --trusted-host {host.Trim()}");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(config.CustomArgs))
+        {
+            cmdBuilder.Append($" {config.CustomArgs.Trim()}");
+        }
+
+        var command = cmdBuilder.ToString();
 
         AppendLine(_harnessLog, string.Empty);
         AppendLine(_harnessLog, new string('=', 64));
-        AppendLine(_harnessLog, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Starting DeepSeek Harness");
+        AppendLine(_harnessLog, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Starting DeepSeek Harness: {command}");
+        LogLauncher($"Starting Harness command: {command}");
 
         var startInfo = new ProcessStartInfo
         {
             FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
-            Arguments = "/d /s /c \"npx --yes @deepseek-ai/dsh web\"",
+            Arguments = $"/d /s /c \"{command}\"",
             WorkingDirectory = AppContext.BaseDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
@@ -90,6 +259,7 @@ public sealed class HarnessService : IDisposable
             if (args.Data is not null)
             {
                 AppendLine(_harnessLog, args.Data);
+                ProcessLogLine(args.Data);
             }
         };
 
@@ -98,6 +268,7 @@ public sealed class HarnessService : IDisposable
             if (args.Data is not null)
             {
                 AppendLine(_harnessErrorLog, args.Data);
+                ProcessLogLine(args.Data);
             }
         };
 
@@ -153,8 +324,29 @@ public sealed class HarnessService : IDisposable
     public async Task StopAsync()
     {
         ThrowIfDisposed();
-
+        _stopping = true;
         _monitorCts?.Cancel();
+
+        if (_installProcess is { HasExited: false })
+        {
+            try
+            {
+                var installPid = _installProcess.Id;
+                LogLauncher($"Stopping install/update process tree (PID {installPid}).");
+                using var killProcess = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "taskkill.exe",
+                    Arguments = $"/PID {installPid} /T /F",
+                    CreateNoWindow = true,
+                    UseShellExecute = false
+                });
+                killProcess?.WaitForExit(2000);
+            }
+            catch (Exception ex)
+            {
+                LogLauncher($"taskkill on install process failed: {ex.Message}");
+            }
+        }
 
         if (_process is null || _process.HasExited)
         {
@@ -162,7 +354,6 @@ public sealed class HarnessService : IDisposable
             return;
         }
 
-        _stopping = true;
         var pid = _process.Id;
         LogLauncher($"Stopping Harness process tree (PID {pid}).");
 
@@ -312,7 +503,55 @@ public sealed class HarnessService : IDisposable
         }
 
         State = state;
+
+        if (state == HarnessState.Running)
+        {
+            UpdateStatusMessage("Running");
+        }
+        else if (state == HarnessState.Stopped)
+        {
+            UpdateStatusMessage("Stopped");
+        }
+        else if (state == HarnessState.Failed)
+        {
+            UpdateStatusMessage("Failed");
+        }
+
         StateChanged?.Invoke(this, state);
+    }
+
+    private void ProcessLogLine(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return;
+        }
+
+        if (line.Contains("Need to install", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("@deepseek-ai/dsh@", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("npm install", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("reify", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("npm notice", StringComparison.OrdinalIgnoreCase))
+        {
+            UpdateStatusMessage("Updating packages...");
+        }
+        else if (line.Contains("http://127.0.0.1:3080", StringComparison.OrdinalIgnoreCase) ||
+                 line.Contains("dsh web:", StringComparison.OrdinalIgnoreCase))
+        {
+            SetState(HarnessState.Running);
+            UpdateStatusMessage("Running");
+        }
+    }
+
+    private void UpdateStatusMessage(string message)
+    {
+        if (StatusMessage == message)
+        {
+            return;
+        }
+
+        StatusMessage = message;
+        StatusMessageChanged?.Invoke(this, message);
     }
 
     private void OpenFile(string path)
@@ -369,6 +608,26 @@ public sealed class HarnessService : IDisposable
         _disposed = true;
         _monitorCts?.Cancel();
         _monitorCts?.Dispose();
+
+        if (_installProcess is { HasExited: false })
+        {
+            try
+            {
+                var installPid = _installProcess.Id;
+                using var kill = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "taskkill.exe",
+                    Arguments = $"/PID {installPid} /T /F",
+                    CreateNoWindow = true,
+                    UseShellExecute = false
+                });
+                kill?.WaitForExit(2000);
+            }
+            catch
+            {
+                // Best effort during shutdown
+            }
+        }
 
         if (_process is { HasExited: false })
         {

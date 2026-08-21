@@ -4,14 +4,15 @@ An unofficial community Windows system tray launcher for DeepSeek Harness.
 
 This project is not affiliated with or endorsed by DeepSeek.
 
-It starts DeepSeek Harness silently in the background, opens the local web interface when ready, and provides a modern DeepSea WPF popup interface from the system tray.
+It starts DeepSeek Harness silently in the background, opens the local web interface when ready, and provides a modern DeepSea WPF popup interface from the system tray with remote access configuration for [DSH-Mobile](https://github.com/SimonMedy/DSH-Mobile).
 
 ## Features
 
 - DeepSea dark ocean tray popup interface
 - Silent background execution (no persistent terminal window)
 - Automatic browser launch when web interface is ready
-- System tray controls (open interface, view logs, restart, stop)
+- System tray controls (open interface, view logs, settings, restart, stop)
+- Built-in **Settings** UI to configure **Trusted Hosts** (Tailscale / LAN / DSH-Mobile)
 - Automatic dependency update support (`npx --yes`)
 - Reliable process lifecycle management & port cleanup
 - Single-instance protection
@@ -41,7 +42,7 @@ Launch **DeepSeek Harness** from the desktop shortcut.
 
 The launcher will:
 
-1. Start DeepSeek Harness in the background.
+1. Start DeepSeek Harness in the background (with any configured trusted hosts).
 2. Wait for `http://127.0.0.1:3080`.
 3. Open the interface in your default browser.
 4. Keep the tray icon available while Harness is running.
@@ -53,10 +54,31 @@ Click the tray icon to open the DeepSea popup:
 - **Open DeepSeek Harness** (opens `http://127.0.0.1:3080`)
 - **Open Harness Logs**
 - **Open Launcher Logs**
+- **Settings** (configure remote hostnames & startup options)
+- **Update DeepSeek Harness** (installs latest version on demand)
 - **Restart DeepSeek Harness**
 - **Stop DeepSeek Harness**
 
 Double-clicking the tray icon also opens the web interface directly.
+
+## Remote Access & DSH-Mobile Setup
+
+If you use [DSH-Mobile](https://github.com/SimonMedy/DSH-Mobile) or access Harness over Tailscale / LAN:
+
+1. Click the tray icon and select **Settings**.
+2. Enter your Tailscale domain name or private IP addresses (one per line, or comma-separated):
+   ```text
+   my-pc.tailnet.ts.net
+   100.x.y.z
+   ```
+3. Click **Save & Restart**.
+4. The launcher will automatically start Harness with:
+   ```text
+   npx --yes @deepseek-ai/dsh web --trusted-host my-pc.tailnet.ts.net --trusted-host 100.x.y.z
+   ```
+
+Configuration is stored locally on your machine at:
+`%LOCALAPPDATA%\DeepSeekHarness\config.json` (outside the Git repository).
 
 ## Logs
 
@@ -85,8 +107,10 @@ launcher.log
 │   └── DSHLauncher/
 │       ├── App.xaml / App.xaml.cs
 │       ├── MainWindow.xaml / MainWindow.xaml.cs
+│       ├── SettingsWindow.xaml / SettingsWindow.xaml.cs
 │       ├── DSHLauncher.csproj
 │       └── Services/
+│           ├── ConfigService.cs
 │           └── HarnessService.cs
 └── assets/
     └── DeepSeekHarness.ico
