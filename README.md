@@ -9,11 +9,12 @@ It starts DeepSeek Harness silently in the background, opens the local web inter
 ## Features
 
 - DeepSea dark ocean tray popup interface
-- Silent background execution (no persistent terminal window)
+- Instant local boot (`dsh web`) with silent background execution
 - Automatic browser launch when web interface is ready
 - System tray controls (open interface, view logs, settings, restart, stop)
 - Built-in **Settings** UI to configure **Trusted Hosts** (Tailscale / LAN / DSH-Mobile)
-- Automatic dependency update support (`npx --yes`)
+- On-demand **Update DeepSeek Harness** feature with automated package management
+- Automatic first-launch dependency installation
 - Reliable process lifecycle management & port cleanup
 - Single-instance protection
 
@@ -21,13 +22,15 @@ It starts DeepSeek Harness silently in the background, opens the local web inter
 
 - Windows 10 or Windows 11 (x64)
 - .NET 10 SDK (required for building via `setup.cmd`)
-- Node.js installed (`npx` available in `PATH`)
+- Node.js installed (`npm` available in `PATH`)
 
-DeepSeek Harness is launched with:
+DeepSeek Harness is launched natively with:
 
 ```text
-npx --yes @deepseek-ai/dsh web
+dsh web
 ```
+
+*(Installed automatically on first launch via `npm install -g @deepseek-ai/dsh@latest`)*
 
 ## Setup
 
@@ -74,7 +77,7 @@ If you use [DSH-Mobile](https://github.com/SimonMedy/DSH-Mobile) or access Harne
 3. Click **Save & Restart**.
 4. The launcher will automatically start Harness with:
    ```text
-   npx --yes @deepseek-ai/dsh web --trusted-host my-pc.tailnet.ts.net --trusted-host 100.x.y.z
+   dsh web --trusted-host my-pc.tailnet.ts.net --trusted-host 100.x.y.z
    ```
 
 Configuration is stored locally on your machine at:
