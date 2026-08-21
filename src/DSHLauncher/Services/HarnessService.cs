@@ -71,7 +71,7 @@ public sealed class HarnessService : IDisposable
         var startInfo = new ProcessStartInfo
         {
             FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
-            Arguments = "/d /s /c \"npx @deepseek-ai/dsh web\"",
+            Arguments = "/d /s /c \"npx --yes @deepseek-ai/dsh web\"",
             WorkingDirectory = AppContext.BaseDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
