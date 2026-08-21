@@ -4,29 +4,28 @@ An unofficial community Windows system tray launcher for DeepSeek Harness.
 
 This project is not affiliated with or endorsed by DeepSeek.
 
-It starts DeepSeek Harness silently in the background, opens the local web interface when ready, and keeps a tray icon available for control.
+It starts DeepSeek Harness silently in the background, opens the local web interface when ready, and provides a modern DeepSea WPF popup interface from the system tray.
 
 ## Features
 
-- No persistent PowerShell window
-- System tray controls
-- Automatic browser launch
-- Restart and stop actions
-- Separate Harness and launcher logs
+- DeepSea dark ocean tray popup interface
+- Silent background execution (no persistent terminal window)
+- Automatic browser launch when web interface is ready
+- System tray controls (open interface, view logs, restart, stop)
+- Automatic dependency update support (`npx --yes`)
+- Reliable process lifecycle management & port cleanup
 - Single-instance protection
-- Custom DeepSeek icon
-- No Windows service or startup task
 
 ## Requirements
 
-- Windows 10 or Windows 11
-- Node.js installed
-- `npx` available in `PATH`
+- Windows 10 or Windows 11 (x64)
+- .NET 10 SDK (required for building via `setup.cmd`)
+- Node.js installed (`npx` available in `PATH`)
 
 DeepSeek Harness is launched with:
 
 ```text
-npx @deepseek-ai/dsh web
+npx --yes @deepseek-ai/dsh web
 ```
 
 ## Setup
@@ -34,11 +33,11 @@ npx @deepseek-ai/dsh web
 1. Download or clone this repository.
 2. Keep the folder in a permanent location.
 3. Double-click `setup.cmd`.
-4. A **DeepSeek Harness** shortcut is created on your desktop.
+4. The launcher builds automatically and creates a **DeepSeek Harness** shortcut on your desktop.
 
 ## Usage
 
-Launch **DeepSeek Harness** from the desktop or taskbar.
+Launch **DeepSeek Harness** from the desktop shortcut.
 
 The launcher will:
 
@@ -47,15 +46,17 @@ The launcher will:
 3. Open the interface in your default browser.
 4. Keep the tray icon available while Harness is running.
 
-### Tray menu
+### Tray Menu
 
-- **Open DeepSeek Harness**
+Click the tray icon to open the DeepSea popup:
+
+- **Open DeepSeek Harness** (opens `http://127.0.0.1:3080`)
 - **Open Harness Logs**
 - **Open Launcher Logs**
 - **Restart DeepSeek Harness**
 - **Stop DeepSeek Harness**
 
-Double-clicking the tray icon also opens the web interface.
+Double-clicking the tray icon also opens the web interface directly.
 
 ## Logs
 
@@ -73,27 +74,30 @@ harness-error.log
 launcher.log
 ```
 
-## Repository structure
+## Repository Structure
 
 ```text
 .
 ├── README.md
 ├── setup.cmd
 ├── .gitignore
-├── scripts/
-│   ├── tray-launcher.ps1
-│   └── launch-hidden.vbs
+├── src/
+│   └── DSHLauncher/
+│       ├── App.xaml / App.xaml.cs
+│       ├── MainWindow.xaml / MainWindow.xaml.cs
+│       ├── DSHLauncher.csproj
+│       └── Services/
+│           └── HarnessService.cs
 └── assets/
     └── DeepSeekHarness.ico
 ```
 
-- `setup.cmd` creates the desktop shortcut.
-- `scripts/` contains the launcher logic.
-- `assets/` contains the application icon.
-- `.gitignore` keeps local/editor files out of the repository.
+- `setup.cmd` builds the WPF app to `dist/` and creates the desktop shortcut.
+- `src/DSHLauncher` contains the modern WPF tray application code.
+- `assets/` contains the high-resolution application icon.
 
 ## Notes
 
 This project is only a Windows launcher for DeepSeek Harness. It does not bundle or modify DeepSeek Harness itself.
 
-Stopping the launcher from the tray also stops the DeepSeek Harness process tree it started.
+Stopping the launcher from the tray also terminates the DeepSeek Harness process tree it started.
