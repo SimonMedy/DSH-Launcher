@@ -69,16 +69,42 @@ public partial class SettingsWindow : Window
         {
             if (!TrustedAuthority.TryNormalize(host, out var normalized, out var error))
             {
-                MessageBox.Show(error, "Invalid trusted authority", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(
+                    error,
+                    "Invalid trusted authority",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
                 return;
             }
+
             normalizedHosts.Add(normalized);
         }
 
         var customArgs = CustomArgsTextBox.Text.Trim();
-        if (!CommandLineTokenizer.TryTokenize(customArgs, out _, out var customArgsError))
+        if (!CommandLineTokenizer.TryTokenize(
+                customArgs,
+                out var parsedArguments,
+                out var customArgsError))
         {
-            MessageBox.Show(customArgsError, "Invalid additional arguments", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(
+                customArgsError,
+                "Invalid additional arguments",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        if (!HarnessEndpoint.TryFilterLauncherOwnedArguments(
+                parsedArguments,
+                out _,
+                out _,
+                out var launcherOwnedArgumentError))
+        {
+            MessageBox.Show(
+                launcherOwnedArgumentError,
+                "Reserved DSH option",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
             return;
         }
 
@@ -121,7 +147,11 @@ public partial class SettingsWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show(ex.Message, "Unable to open config.json", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(
+                ex.Message,
+                "Unable to open config.json",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
         }
     }
 
@@ -130,8 +160,14 @@ public partial class SettingsWindow : Window
         try
         {
             var uri = new Uri("pack://application:,,,/DeepSeekHarness.ico", UriKind.Absolute);
-            var decoder = new IconBitmapDecoder(uri, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
-            var highResFrame = decoder.Frames.OrderByDescending(f => f.PixelWidth).FirstOrDefault();
+            var decoder = new IconBitmapDecoder(
+                uri,
+                BitmapCreateOptions.None,
+                BitmapCacheOption.OnLoad);
+            var highResFrame = decoder.Frames
+                .OrderByDescending(f => f.PixelWidth)
+                .FirstOrDefault();
+
             if (highResFrame is not null)
             {
                 AppIconImage.Source = highResFrame;

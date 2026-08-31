@@ -541,17 +541,36 @@ public sealed class HarnessService : IDisposable
         var actionName = isUpdate ? "Updating" : "Installing";
         LogLauncher($"{actionName} DeepSeek Harness globally via npm.");
 
+        if (!isUpdate)
+        {
+            SetState(HarnessState.Starting);
+        }
+
+        UpdateStatusMessage(
+            isUpdate ? "Checking latest version..." : "Resolving install version...");
+
+        var exactVersion = await ResolveLatestVersionAsync();
+        var installedRuntime = ResolveDshRuntime();
+        var installedVersion = installedRuntime?.Version;
+
+        LogLauncher(
+            installedVersion is null
+                ? $"Resolved {PackageName} target version: {exactVersion}."
+                : $"Installed {PackageName} version: {installedVersion}; target version: {exactVersion}.");
+
+        if (isUpdate && string.Equals(installedVersion, exactVersion, StringComparison.Ordinal))
+        {
+            LogLauncher($"DeepSeek Harness is already up to date at {exactVersion}; npm install skipped.");
+            UpdateStatusMessage(State == HarnessState.Running ? "Running" : $"Already up to date ({exactVersion})");
+            return;
+        }
+
         if (_process is { HasExited: false })
         {
             await StopAsync();
         }
 
         SetState(HarnessState.Starting);
-        UpdateStatusMessage(
-            isUpdate ? "Checking latest version..." : "Resolving install version...");
-
-        var exactVersion = await ResolveLatestVersionAsync();
-        LogLauncher($"Resolved {PackageName} target version: {exactVersion}.");
         UpdateStatusMessage(
             isUpdate ? $"Updating to {exactVersion}..." : $"Installing {exactVersion}...");
 
@@ -719,7 +738,7 @@ public sealed class HarnessService : IDisposable
         return version;
     }
 
-    private static (string NodeExe, string Entrypoint)? ResolveDshRuntime()
+    private static DshRuntime? ResolveDshRuntime()
     {
         var nodeExe = FirstExistingPath(RunStaticCommand("where.exe node.exe", TimeSpan.FromSeconds(3)));
         if (nodeExe is null)
@@ -777,7 +796,18 @@ public sealed class HarnessService : IDisposable
             return null;
         }
 
-        return (nodeExe, entrypoint);
+        string? version = null;
+        if (document.RootElement.TryGetProperty("version", out var versionElement) &&
+            versionElement.ValueKind == JsonValueKind.String)
+        {
+            var candidate = versionElement.GetString();
+            if (!string.IsNullOrWhiteSpace(candidate) && PackageVersionPattern.IsMatch(candidate))
+            {
+                version = candidate;
+            }
+        }
+
+        return new DshRuntime(nodeExe, entrypoint, version);
     }
 
     private static string? FirstExistingPath(string output) => output
@@ -1146,4 +1176,9 @@ public sealed class HarnessService : IDisposable
         _actionLock.Dispose();
         LogLauncher("WPF launcher stopped.");
     }
+
+    private sealed record DshRuntime(
+        string NodeExe,
+        string Entrypoint,
+        string? Version);
 }
