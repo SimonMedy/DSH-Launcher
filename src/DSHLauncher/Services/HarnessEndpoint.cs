@@ -3,6 +3,12 @@ using System.Text.RegularExpressions;
 
 namespace DSHLauncher.Services;
 
+public sealed record HarnessStartupAnnouncement(
+    int Port,
+    string BrowserUrl,
+    bool RequiresAuthenticatedHandoff,
+    string SanitizedLogLine);
+
 public static class HarnessEndpoint
 {
     public const int PreferredPort = 3080;
@@ -10,7 +16,11 @@ public static class HarnessEndpoint
     public const string DefaultWebUrl = "http://127.0.0.1:3080";
 
     private static readonly Regex StartupUrlPattern = new(
-        @"^\s*dsh web:\s+http://127\.0\.0\.1:(?<port>[0-9]{1,5})(?:[/\?#][^\s]*)?(?:\s|$)",
+        @"^\s*dsh web:\s+(?<url>http://127\.0\.0\.1:[0-9]{1,5}(?:[/\?#][^\s]*)?)(?:\s|$)",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    private static readonly Regex SensitiveValuePattern = new(
+        @"(?i)(?<key>(?:token|access_token|api[_-]?key|secret)=)[^&\s)]+",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     public static string BuildWebUrl(int port)
@@ -23,25 +33,67 @@ public static class HarnessEndpoint
         return $"http://{LoopbackHost}:{port.ToString(CultureInfo.InvariantCulture)}";
     }
 
-    public static bool TryParseStartupPort(string? line, out int port)
+    public static bool TryParseStartupAnnouncement(
+        string? line,
+        out HarnessStartupAnnouncement announcement)
     {
-        port = 0;
+        announcement = null!;
         if (string.IsNullOrWhiteSpace(line))
         {
             return false;
         }
 
         var match = StartupUrlPattern.Match(line);
-        return match.Success &&
-               int.TryParse(
-                   match.Groups["port"].Value,
-                   NumberStyles.None,
-                   CultureInfo.InvariantCulture,
-                   out port) &&
-               port is >= 1 and <= 65535;
+        if (!match.Success ||
+            !Uri.TryCreate(match.Groups["url"].Value, UriKind.Absolute, out var uri) ||
+            !string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(uri.Host, LoopbackHost, StringComparison.Ordinal) ||
+            uri.Port is < 1 or > 65535)
+        {
+            return false;
+        }
+
+        var cleanUrl = BuildWebUrl(uri.Port);
+        var requiresAuthenticatedHandoff =
+            !string.IsNullOrEmpty(uri.Query) ||
+            !string.IsNullOrEmpty(uri.Fragment) ||
+            (uri.AbsolutePath.Length > 0 && uri.AbsolutePath != "/");
+
+        var sanitized = requiresAuthenticatedHandoff
+            ? $"dsh web: {cleanUrl} [authenticated startup URL redacted]"
+            : $"dsh web: {cleanUrl}";
+
+        announcement = new HarnessStartupAnnouncement(
+            uri.Port,
+            uri.AbsoluteUri,
+            requiresAuthenticatedHandoff,
+            sanitized);
+        return true;
     }
 
-    public static bool TryExtractPortOverride(
+    public static bool TryParseStartupPort(string? line, out int port)
+    {
+        port = 0;
+        if (!TryParseStartupAnnouncement(line, out var announcement))
+        {
+            return false;
+        }
+
+        port = announcement.Port;
+        return true;
+    }
+
+    public static string RedactSensitiveValues(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return value;
+        }
+
+        return SensitiveValuePattern.Replace(value, "${key}[redacted]");
+    }
+
+    public static bool TryFilterLauncherOwnedArguments(
         IReadOnlyList<string> arguments,
         out int? requestedPort,
         out IReadOnlyList<string> remainingArguments,
@@ -96,6 +148,28 @@ public static class HarnessEndpoint
                 }
 
                 requestedPort = parsedPort;
+                continue;
+            }
+
+            if (string.Equals(argument, "--host", StringComparison.OrdinalIgnoreCase) ||
+                argument.StartsWith("--host=", StringComparison.OrdinalIgnoreCase))
+            {
+                remainingArguments = Array.Empty<string>();
+                error = "--host is managed by DSH Launcher and is fixed to 127.0.0.1 for safety.";
+                return false;
+            }
+
+            if (string.Equals(argument, "--trusted-host", StringComparison.OrdinalIgnoreCase) ||
+                argument.StartsWith("--trusted-host=", StringComparison.OrdinalIgnoreCase))
+            {
+                remainingArguments = Array.Empty<string>();
+                error = "--trusted-host is managed by DSH Launcher. Add trusted authorities in Settings instead.";
+                return false;
+            }
+
+            if (string.Equals(argument, "--no-open", StringComparison.OrdinalIgnoreCase))
+            {
+                // The launcher always owns browser handoff, so an existing --no-open is redundant.
                 continue;
             }
 

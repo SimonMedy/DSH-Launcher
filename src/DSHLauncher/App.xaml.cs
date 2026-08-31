@@ -34,11 +34,9 @@ public partial class App : System.Windows.Application
             _popup = new MainWindow(_harness);
 
             var executablePath = Environment.ProcessPath
-                ?? throw new InvalidOperationException(
-                    "The launcher executable path is unavailable.");
+                ?? throw new InvalidOperationException("The launcher executable path is unavailable.");
             var appIcon = Icon.ExtractAssociatedIcon(executablePath)
-                ?? throw new InvalidOperationException(
-                    "The launcher icon could not be loaded.");
+                ?? throw new InvalidOperationException("The launcher icon could not be loaded.");
 
             _trayIcon = new Forms.NotifyIcon
             {
@@ -57,17 +55,19 @@ public partial class App : System.Windows.Application
 
             _trayIcon.DoubleClick += (_, _) => _harness.OpenWebInterface();
 
-            _harness.StateChanged += (_, _) =>
-            {
-                Dispatcher.Invoke(UpdateTrayText);
-            };
-
-            _harness.StatusMessageChanged += (_, _) =>
-            {
-                Dispatcher.Invoke(UpdateTrayText);
-            };
+            _harness.StateChanged += (_, _) => Dispatcher.Invoke(UpdateTrayText);
+            _harness.StatusMessageChanged += (_, _) => Dispatcher.Invoke(UpdateTrayText);
 
             await _harness.StartAsync(openBrowserWhenReady: false);
+
+            if (!string.IsNullOrWhiteSpace(_harness.Config.LastRecoveryWarning))
+            {
+                System.Windows.MessageBox.Show(
+                    _harness.Config.LastRecoveryWarning,
+                    "DSH Launcher - Configuration recovery",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
         }
         catch (Exception ex)
         {
@@ -115,8 +115,8 @@ public partial class App : System.Windows.Application
             if (!HarnessService.TryGetPublishedWebUrl(out var webUrl))
             {
                 System.Windows.MessageBox.Show(
-                    "DSH Launcher is already running, but its web interface is not ready yet. " +
-                    "Wait for startup to finish and open it from the tray.",
+                    "DSH Launcher is already running, but its web interface is either not ready yet or " +
+                    "requires an authenticated browser handoff. Use the running launcher's tray popup to open it safely.",
                     "DSH Launcher",
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);

@@ -26,11 +26,20 @@ public sealed class RuntimeEndpointStore
         _statePath = statePath ?? throw new ArgumentNullException(nameof(statePath));
     }
 
-    public void Publish(int launcherPid, int port)
+    public void Publish(
+        int launcherPid,
+        long launcherStartTimeUtcTicks,
+        int port,
+        bool requiresAuthenticatedHandoff)
     {
         if (launcherPid <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(launcherPid));
+        }
+
+        if (launcherStartTimeUtcTicks <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(launcherStartTimeUtcTicks));
         }
 
         _ = HarnessEndpoint.BuildWebUrl(port);
@@ -45,7 +54,13 @@ public sealed class RuntimeEndpointStore
 
         try
         {
-            var json = JsonSerializer.Serialize(new RuntimeEndpointState(launcherPid, port), JsonOptions);
+            var json = JsonSerializer.Serialize(
+                new RuntimeEndpointState(
+                    launcherPid,
+                    launcherStartTimeUtcTicks,
+                    port,
+                    requiresAuthenticatedHandoff),
+                JsonOptions);
             File.WriteAllText(tempPath, json);
             File.Move(tempPath, _statePath, overwrite: true);
         }
@@ -65,10 +80,16 @@ public sealed class RuntimeEndpointStore
         }
     }
 
-    public bool TryRead(out int launcherPid, out int port)
+    public bool TryRead(
+        out int launcherPid,
+        out long launcherStartTimeUtcTicks,
+        out int port,
+        out bool requiresAuthenticatedHandoff)
     {
         launcherPid = 0;
+        launcherStartTimeUtcTicks = 0;
         port = 0;
+        requiresAuthenticatedHandoff = false;
 
         try
         {
@@ -89,13 +110,16 @@ public sealed class RuntimeEndpointStore
 
             if (state is null ||
                 state.LauncherPid <= 0 ||
+                state.LauncherStartTimeUtcTicks <= 0 ||
                 state.Port is < 1 or > 65535)
             {
                 return false;
             }
 
             launcherPid = state.LauncherPid;
+            launcherStartTimeUtcTicks = state.LauncherStartTimeUtcTicks;
             port = state.Port;
+            requiresAuthenticatedHandoff = state.RequiresAuthenticatedHandoff;
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -119,5 +143,9 @@ public sealed class RuntimeEndpointStore
         }
     }
 
-    private sealed record RuntimeEndpointState(int LauncherPid, int Port);
+    private sealed record RuntimeEndpointState(
+        int LauncherPid,
+        long LauncherStartTimeUtcTicks,
+        int Port,
+        bool RequiresAuthenticatedHandoff);
 }
