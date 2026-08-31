@@ -20,7 +20,6 @@ public partial class SettingsWindow : Window
         _config = _configService.Load();
 
         LoadHighResIcon();
-
         ContentGrid.SizeChanged += (_, _) =>
         {
             ContentGrid.Clip = new RectangleGeometry(
@@ -29,19 +28,22 @@ public partial class SettingsWindow : Window
         };
 
         PopulateFields();
+
+        if (!string.IsNullOrWhiteSpace(_configService.LastRecoveryWarning))
+        {
+            MessageBox.Show(
+                _configService.LastRecoveryWarning,
+                "DSH Launcher - Configuration recovery",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
     }
 
     private void PopulateFields()
     {
-        if (_config.TrustedHosts is { Count: > 0 })
-        {
-            TrustedHostsTextBox.Text = string.Join(Environment.NewLine, _config.TrustedHosts);
-        }
-        else
-        {
-            TrustedHostsTextBox.Text = string.Empty;
-        }
-
+        TrustedHostsTextBox.Text = _config.TrustedHosts is { Count: > 0 }
+            ? string.Join(Environment.NewLine, _config.TrustedHosts)
+            : string.Empty;
         CustomArgsTextBox.Text = _config.CustomArgs ?? string.Empty;
     }
 
@@ -62,10 +64,44 @@ public partial class SettingsWindow : Window
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        _config.TrustedHosts = rawHosts;
-        _config.CustomArgs = CustomArgsTextBox.Text.Trim();
+        var normalizedHosts = new List<string>();
+        foreach (var host in rawHosts)
+        {
+            if (!TrustedAuthority.TryNormalize(host, out var normalized, out var error))
+            {
+                MessageBox.Show(error, "Invalid trusted authority", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            normalizedHosts.Add(normalized);
+        }
 
-        _configService.Save(_config);
+        var customArgs = CustomArgsTextBox.Text.Trim();
+        if (!CommandLineTokenizer.TryTokenize(customArgs, out _, out var customArgsError))
+        {
+            MessageBox.Show(customArgsError, "Invalid additional arguments", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var nextConfig = new LauncherConfig
+        {
+            TrustedHosts = normalizedHosts.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+            CustomArgs = customArgs
+        };
+
+        try
+        {
+            _configService.Save(nextConfig);
+            _config = nextConfig;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(
+                $"The configuration could not be saved. The previous settings are still active.\n\n{ex.Message}",
+                "DSH Launcher - Save failed",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            return;
+        }
 
         DialogResult = true;
         Close();
@@ -79,7 +115,14 @@ public partial class SettingsWindow : Window
 
     private void OpenConfigFileButton_Click(object sender, RoutedEventArgs e)
     {
-        _configService.OpenConfigFile();
+        try
+        {
+            _configService.OpenConfigFile();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "Unable to open config.json", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private void LoadHighResIcon()
@@ -96,7 +139,7 @@ public partial class SettingsWindow : Window
         }
         catch
         {
-            // Keep fallback
+            // Keep fallback icon.
         }
     }
 }

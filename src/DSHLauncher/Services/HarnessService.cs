@@ -1,6 +1,9 @@
 using System.Diagnostics;
-using System.IO;
+using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace DSHLauncher.Services;
 
@@ -15,19 +18,20 @@ public enum HarnessState
 public sealed class HarnessService : IDisposable
 {
     public const string WebUrl = "http://127.0.0.1:3080";
+    private const int WebPort = 3080;
+    private const string PackageName = "@deepseek-ai/dsh";
 
-    private readonly HttpClient _httpClient = new()
-    {
-        Timeout = TimeSpan.FromSeconds(1)
-    };
+    private static readonly Regex PackageVersionPattern = new(
+        "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
+    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(1) };
     private readonly object _logLock = new();
-    private readonly string _logDirectory;
     private readonly string _launcherLog;
     private readonly string _harnessLog;
     private readonly string _harnessErrorLog;
-
     private readonly SemaphoreSlim _actionLock = new(1, 1);
+
     private Process? _process;
     private Process? _installProcess;
     private CancellationTokenSource? _monitorCts;
@@ -35,9 +39,7 @@ public sealed class HarnessService : IDisposable
     private bool _disposed;
 
     public HarnessState State { get; private set; } = HarnessState.Stopped;
-
     public string StatusMessage { get; private set; } = "Starting";
-
     public ConfigService Config { get; } = new();
 
     public event EventHandler<HarnessState>? StateChanged;
@@ -45,18 +47,27 @@ public sealed class HarnessService : IDisposable
 
     public HarnessService()
     {
-        _logDirectory = Path.Combine(
+        var logDirectory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "DeepSeekHarness",
             "logs");
-
-        Directory.CreateDirectory(_logDirectory);
-
-        _launcherLog = Path.Combine(_logDirectory, "launcher.log");
-        _harnessLog = Path.Combine(_logDirectory, "harness.log");
-        _harnessErrorLog = Path.Combine(_logDirectory, "harness-error.log");
-
+        Directory.CreateDirectory(logDirectory);
+        _launcherLog = Path.Combine(logDirectory, "launcher.log");
+        _harnessLog = Path.Combine(logDirectory, "harness.log");
+        _harnessErrorLog = Path.Combine(logDirectory, "harness-error.log");
         LogLauncher("WPF launcher starting.");
+    }
+
+    public bool IsDshInstalled()
+    {
+        try
+        {
+            return ResolveDshRuntime() is not null;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public async Task UpdateAsync()
@@ -77,126 +88,9 @@ public sealed class HarnessService : IDisposable
         }
     }
 
-    public bool IsDshInstalled()
-    {
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
-                Arguments = "/d /s /c \"where.exe dsh\"",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            using var proc = Process.Start(psi);
-            if (proc is null) return false;
-            proc.WaitForExit(1000);
-            return proc.ExitCode == 0;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private async Task InstallOrUpdateHarnessAsync(bool isUpdate)
-    {
-        var actionName = isUpdate ? "Updating" : "Installing";
-        LogLauncher($"{actionName} DeepSeek Harness globally via npm...");
-
-        if (_process is { HasExited: false })
-        {
-            await StopAsync();
-        }
-
-        SetState(HarnessState.Starting);
-        UpdateStatusMessage(isUpdate ? "Updating DeepSeek Harness..." : "Installing DeepSeek Harness...");
-
-        AppendLine(_harnessLog, string.Empty);
-        AppendLine(_harnessLog, new string('=', 64));
-        AppendLine(_harnessLog, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {actionName} DeepSeek Harness: npm install -g @deepseek-ai/dsh@latest");
-
-        var psi = new ProcessStartInfo
-        {
-            FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
-            Arguments = "/d /s /c \"npm install -g @deepseek-ai/dsh@latest\"",
-            WorkingDirectory = AppContext.BaseDirectory,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-
-        using var proc = new Process { StartInfo = psi };
-        proc.OutputDataReceived += (_, args) =>
-        {
-            if (args.Data is not null)
-            {
-                AppendLine(_harnessLog, args.Data);
-            }
-        };
-        proc.ErrorDataReceived += (_, args) =>
-        {
-            if (args.Data is not null)
-            {
-                AppendLine(_harnessErrorLog, args.Data);
-            }
-        };
-
-        _installProcess = proc;
-
-        try
-        {
-            proc.Start();
-            proc.BeginOutputReadLine();
-            proc.BeginErrorReadLine();
-            await proc.WaitForExitAsync();
-        }
-        catch (OperationCanceledException)
-        {
-            LogLauncher($"{actionName} cancelled.");
-            return;
-        }
-        catch (Exception ex)
-        {
-            if (_stopping)
-            {
-                return;
-            }
-
-            LogLauncher($"Error executing npm install: {ex.Message}");
-            SetState(HarnessState.Failed);
-            UpdateStatusMessage("Install failed");
-            throw;
-        }
-        finally
-        {
-            _installProcess = null;
-        }
-
-        if (_stopping)
-        {
-            return;
-        }
-
-        if (proc.ExitCode != 0)
-        {
-            LogLauncher($"npm install failed with exit code {proc.ExitCode}.");
-            SetState(HarnessState.Failed);
-            UpdateStatusMessage("Install failed");
-            throw new InvalidOperationException($"npm install failed with exit code {proc.ExitCode}. Check harness-error.log for details.");
-        }
-
-        LogLauncher($"DeepSeek Harness {(isUpdate ? "updated" : "installed")} successfully.");
-        await StartAsync(openBrowserWhenReady: !isUpdate);
-    }
-
     public async Task StartAsync(bool openBrowserWhenReady = false)
     {
         ThrowIfDisposed();
-
         if (_process is { HasExited: false })
         {
             return;
@@ -204,7 +98,7 @@ public sealed class HarnessService : IDisposable
 
         if (!IsDshInstalled())
         {
-            LogLauncher("DeepSeek Harness not found globally. Running initial install...");
+            LogLauncher("DeepSeek Harness not found globally. Running initial install.");
             await InstallOrUpdateHarnessAsync(isUpdate: false);
             return;
         }
@@ -213,47 +107,63 @@ public sealed class HarnessService : IDisposable
         SetState(HarnessState.Starting);
         UpdateStatusMessage("Starting");
 
+        if (!IsPortAvailable(WebPort))
+        {
+            SetState(HarnessState.Failed);
+            UpdateStatusMessage("Port 3080 is already in use");
+            throw new InvalidOperationException("TCP port 3080 is already in use. DSH Launcher will not terminate the process that owns it. Stop the conflicting application or reconfigure it, then try again.");
+        }
+
         var config = Config.Load();
-        var baseExe = IsDshInstalled() ? "dsh web" : "npx --yes @deepseek-ai/dsh web";
-        var cmdBuilder = new System.Text.StringBuilder(baseExe);
-
-        if (config.TrustedHosts is { Count: > 0 })
+        var authorities = new List<string>();
+        foreach (var host in config.TrustedHosts.Where(h => !string.IsNullOrWhiteSpace(h)))
         {
-            foreach (var host in config.TrustedHosts.Where(h => !string.IsNullOrWhiteSpace(h)))
+            if (!TrustedAuthority.TryNormalize(host, out var normalized, out var error))
             {
-                cmdBuilder.Append($" --trusted-host {host.Trim()}");
+                SetState(HarnessState.Failed);
+                UpdateStatusMessage("Invalid trusted authority");
+                throw new InvalidDataException($"Invalid trusted authority in config.json: {error}");
             }
+            authorities.Add(normalized);
         }
 
-        if (!string.IsNullOrWhiteSpace(config.CustomArgs))
+        if (!CommandLineTokenizer.TryTokenize(config.CustomArgs, out var customArgs, out var customArgsError))
         {
-            cmdBuilder.Append($" {config.CustomArgs.Trim()}");
+            SetState(HarnessState.Failed);
+            UpdateStatusMessage("Invalid additional arguments");
+            throw new InvalidDataException(customArgsError);
         }
 
-        var command = cmdBuilder.ToString();
+        var runtime = ResolveDshRuntime()
+            ?? throw new InvalidOperationException("DeepSeek Harness is installed but its Node.js entrypoint could not be resolved.");
 
         AppendLine(_harnessLog, string.Empty);
         AppendLine(_harnessLog, new string('=', 64));
-        AppendLine(_harnessLog, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Starting DeepSeek Harness: {command}");
-        LogLauncher($"Starting Harness command: {command}");
+        AppendLine(_harnessLog, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Starting DeepSeek Harness with {authorities.Count} trusted authorities and {customArgs.Count} additional arguments.");
+        LogLauncher($"Starting Harness via node.exe with {authorities.Count} trusted authorities and {customArgs.Count} additional arguments. Argument values are intentionally not logged.");
 
         var startInfo = new ProcessStartInfo
         {
-            FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
-            Arguments = $"/d /s /c \"{command}\"",
+            FileName = runtime.Value.NodeExe,
             WorkingDirectory = AppContext.BaseDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
-
-        _process = new Process
+        startInfo.ArgumentList.Add(runtime.Value.Entrypoint);
+        startInfo.ArgumentList.Add("web");
+        foreach (var host in authorities)
         {
-            StartInfo = startInfo,
-            EnableRaisingEvents = true
-        };
+            startInfo.ArgumentList.Add("--trusted-host");
+            startInfo.ArgumentList.Add(host);
+        }
+        foreach (var argument in customArgs)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
 
+        _process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
         _process.OutputDataReceived += (_, args) =>
         {
             if (args.Data is not null)
@@ -262,7 +172,6 @@ public sealed class HarnessService : IDisposable
                 ProcessLogLine(args.Data);
             }
         };
-
         _process.ErrorDataReceived += (_, args) =>
         {
             if (args.Data is not null)
@@ -271,14 +180,12 @@ public sealed class HarnessService : IDisposable
                 ProcessLogLine(args.Data);
             }
         };
-
         _process.Exited += (_, _) =>
         {
             if (_stopping)
             {
                 return;
             }
-
             var exitCode = SafeExitCode(_process);
             LogLauncher($"Harness process exited unexpectedly with code {exitCode}.");
             SetState(exitCode == 0 ? HarnessState.Stopped : HarnessState.Failed);
@@ -286,13 +193,10 @@ public sealed class HarnessService : IDisposable
 
         try
         {
-            KillProcessOnPort(3080);
-
             if (!_process.Start())
             {
                 throw new InvalidOperationException("Windows could not start the Harness process.");
             }
-
             _process.BeginOutputReadLine();
             _process.BeginErrorReadLine();
             LogLauncher($"Harness process started with PID {_process.Id}.");
@@ -308,7 +212,6 @@ public sealed class HarnessService : IDisposable
         _monitorCts?.Cancel();
         _monitorCts?.Dispose();
         _monitorCts = new CancellationTokenSource();
-
         await MonitorUntilReadyAsync(openBrowserWhenReady, _monitorCts.Token);
     }
 
@@ -327,38 +230,19 @@ public sealed class HarnessService : IDisposable
         _stopping = true;
         _monitorCts?.Cancel();
 
-        if (_installProcess is { HasExited: false })
-        {
-            try
-            {
-                var installPid = _installProcess.Id;
-                LogLauncher($"Stopping install/update process tree (PID {installPid}).");
-                using var killProcess = Process.Start(new ProcessStartInfo
-                {
-                    FileName = "taskkill.exe",
-                    Arguments = $"/PID {installPid} /T /F",
-                    CreateNoWindow = true,
-                    UseShellExecute = false
-                });
-                killProcess?.WaitForExit(2000);
-            }
-            catch (Exception ex)
-            {
-                LogLauncher($"taskkill on install process failed: {ex.Message}");
-            }
-        }
-
-        if (_process is null || _process.HasExited)
-        {
-            SetState(HarnessState.Stopped);
-            return;
-        }
-
-        var pid = _process.Id;
-        LogLauncher($"Stopping Harness process tree (PID {pid}).");
-
         try
         {
+            await StopOwnedProcessAsync(_installProcess, "install/update");
+            _installProcess = null;
+
+            if (_process is null || _process.HasExited)
+            {
+                SetState(HarnessState.Stopped);
+                return;
+            }
+
+            var pid = _process.Id;
+            LogLauncher($"Stopping owned Harness process tree (PID {pid}).");
             try
             {
                 _process.CancelOutputRead();
@@ -366,51 +250,18 @@ public sealed class HarnessService : IDisposable
             }
             catch
             {
-                // Ignore if stream reading is not active.
+                // Stream reads may already have completed.
             }
 
-            // On Windows, taskkill /PID <pid> /T /F is the most reliable way to terminate cmd -> npx -> node tree
-            try
-            {
-                using var killProcess = Process.Start(new ProcessStartInfo
-                {
-                    FileName = "taskkill.exe",
-                    Arguments = $"/PID {pid} /T /F",
-                    CreateNoWindow = true,
-                    UseShellExecute = false
-                });
-
-                if (killProcess is not null)
-                {
-                    using var killTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-                    await killProcess.WaitForExitAsync(killTimeout.Token);
-                }
-            }
-            catch (Exception ex)
-            {
-                LogLauncher($"taskkill failed: {ex.Message}");
-            }
-
-            try
-            {
-                if (!_process.HasExited)
-                {
-                    _process.Kill(entireProcessTree: true);
-                }
-            }
-            catch
-            {
-                // Process may have already exited via taskkill.
-            }
-
-            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            _process.Kill(entireProcessTree: true);
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             try
             {
                 await _process.WaitForExitAsync(timeoutCts.Token);
             }
             catch (OperationCanceledException)
             {
-                LogLauncher("WaitForExitAsync timed out, proceeding.");
+                LogLauncher("Timed out while waiting for the owned Harness process tree to exit.");
             }
         }
         catch (Exception ex)
@@ -419,36 +270,236 @@ public sealed class HarnessService : IDisposable
         }
         finally
         {
-            try
-            {
-                _process.Dispose();
-            }
-            catch
-            {
-                // Ignore disposal errors.
-            }
-
-            KillProcessOnPort(3080);
-
+            try { _process?.Dispose(); } catch { }
             _process = null;
             _stopping = false;
             SetState(HarnessState.Stopped);
-            LogLauncher("Harness stopped successfully.");
+            LogLauncher("Harness stopped.");
         }
     }
 
-    public void OpenWebInterface()
+    public void OpenWebInterface() => Process.Start(new ProcessStartInfo { FileName = WebUrl, UseShellExecute = true });
+    public void OpenHarnessLogs() => OpenFile(_harnessLog);
+    public void OpenLauncherLogs() => OpenFile(_launcherLog);
+
+    private async Task InstallOrUpdateHarnessAsync(bool isUpdate)
     {
-        Process.Start(new ProcessStartInfo
+        var actionName = isUpdate ? "Updating" : "Installing";
+        LogLauncher($"{actionName} DeepSeek Harness globally via npm.");
+
+        if (_process is { HasExited: false })
         {
-            FileName = WebUrl,
-            UseShellExecute = true
-        });
+            await StopAsync();
+        }
+
+        SetState(HarnessState.Starting);
+        UpdateStatusMessage(isUpdate ? "Checking latest version..." : "Resolving install version...");
+
+        var exactVersion = await ResolveLatestVersionAsync();
+        LogLauncher($"Resolved {PackageName} target version: {exactVersion}.");
+        UpdateStatusMessage(isUpdate ? $"Updating to {exactVersion}..." : $"Installing {exactVersion}...");
+
+        AppendLine(_harnessLog, string.Empty);
+        AppendLine(_harnessLog, new string('=', 64));
+        AppendLine(_harnessLog, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {actionName} DeepSeek Harness: npm install -g {PackageName}@{exactVersion}");
+
+        var shell = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
+        var command = $"npm install -g {PackageName}@{exactVersion}";
+        var psi = new ProcessStartInfo
+        {
+            FileName = shell,
+            Arguments = $"/d /s /c \"{command}\"",
+            WorkingDirectory = AppContext.BaseDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        using var proc = new Process { StartInfo = psi };
+        proc.OutputDataReceived += (_, args) => { if (args.Data is not null) AppendLine(_harnessLog, args.Data); };
+        proc.ErrorDataReceived += (_, args) => { if (args.Data is not null) AppendLine(_harnessErrorLog, args.Data); };
+        _installProcess = proc;
+
+        try
+        {
+            proc.Start();
+            proc.BeginOutputReadLine();
+            proc.BeginErrorReadLine();
+            await proc.WaitForExitAsync();
+        }
+        finally
+        {
+            _installProcess = null;
+        }
+
+        if (proc.ExitCode != 0)
+        {
+            SetState(HarnessState.Failed);
+            UpdateStatusMessage("Install failed");
+            throw new InvalidOperationException($"npm install failed with exit code {proc.ExitCode}. Check harness-error.log for details.");
+        }
+
+        LogLauncher($"DeepSeek Harness {(isUpdate ? "updated" : "installed")} successfully at exact version {exactVersion}.");
+        await StartAsync(openBrowserWhenReady: !isUpdate);
     }
 
-    public void OpenHarnessLogs() => OpenFile(_harnessLog);
+    private async Task<string> ResolveLatestVersionAsync()
+    {
+        var output = await RunStaticCommandAsync("npm view @deepseek-ai/dsh version --json", TimeSpan.FromSeconds(30));
+        string? version;
+        try
+        {
+            version = JsonSerializer.Deserialize<string>(output.Trim());
+        }
+        catch (JsonException)
+        {
+            version = output.Trim().Trim('"');
+        }
 
-    public void OpenLauncherLogs() => OpenFile(_launcherLog);
+        if (string.IsNullOrWhiteSpace(version) || !PackageVersionPattern.IsMatch(version))
+        {
+            throw new InvalidDataException("npm returned an invalid package version. Update aborted before executing an install command.");
+        }
+        return version;
+    }
+
+    private static (string NodeExe, string Entrypoint)? ResolveDshRuntime()
+    {
+        var nodeExe = FirstExistingPath(RunStaticCommand("where.exe node.exe", TimeSpan.FromSeconds(3)));
+        if (nodeExe is null)
+        {
+            return null;
+        }
+
+        var npmRoot = RunStaticCommand("npm root -g", TimeSpan.FromSeconds(5))
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .FirstOrDefault(Directory.Exists);
+        if (npmRoot is null)
+        {
+            return null;
+        }
+
+        var packageDirectory = Path.GetFullPath(Path.Combine(npmRoot, "@deepseek-ai", "dsh"));
+        var packageJsonPath = Path.Combine(packageDirectory, "package.json");
+        if (!File.Exists(packageJsonPath))
+        {
+            return null;
+        }
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(packageJsonPath));
+        if (!doc.RootElement.TryGetProperty("bin", out var bin))
+        {
+            return null;
+        }
+
+        string? relativeEntrypoint = null;
+        if (bin.ValueKind == JsonValueKind.String)
+        {
+            relativeEntrypoint = bin.GetString();
+        }
+        else if (bin.ValueKind == JsonValueKind.Object && bin.TryGetProperty("dsh", out var dshBin) && dshBin.ValueKind == JsonValueKind.String)
+        {
+            relativeEntrypoint = dshBin.GetString();
+        }
+
+        if (string.IsNullOrWhiteSpace(relativeEntrypoint))
+        {
+            return null;
+        }
+
+        var entrypoint = Path.GetFullPath(Path.Combine(packageDirectory, relativeEntrypoint));
+        var packagePrefix = packageDirectory.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!entrypoint.StartsWith(packagePrefix, StringComparison.OrdinalIgnoreCase) || !File.Exists(entrypoint))
+        {
+            return null;
+        }
+
+        return (nodeExe, entrypoint);
+    }
+
+    private static string? FirstExistingPath(string output) => output
+        .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+        .Select(line => line.Trim())
+        .FirstOrDefault(File.Exists);
+
+    private static string RunStaticCommand(string command, TimeSpan timeout)
+    {
+        var shell = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
+        using var proc = Process.Start(new ProcessStartInfo
+        {
+            FileName = shell,
+            Arguments = $"/d /s /c \"{command}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        }) ?? throw new InvalidOperationException($"Could not start static command: {command}");
+
+        if (!proc.WaitForExit((int)timeout.TotalMilliseconds))
+        {
+            try { proc.Kill(entireProcessTree: true); } catch { }
+            throw new TimeoutException($"Static command timed out: {command}");
+        }
+        if (proc.ExitCode != 0)
+        {
+            return string.Empty;
+        }
+        return proc.StandardOutput.ReadToEnd();
+    }
+
+    private static async Task<string> RunStaticCommandAsync(string command, TimeSpan timeout)
+    {
+        var shell = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
+        using var proc = Process.Start(new ProcessStartInfo
+        {
+            FileName = shell,
+            Arguments = $"/d /s /c \"{command}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        }) ?? throw new InvalidOperationException($"Could not start static command: {command}");
+
+        using var timeoutCts = new CancellationTokenSource(timeout);
+        try
+        {
+            await proc.WaitForExitAsync(timeoutCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            try { proc.Kill(entireProcessTree: true); } catch { }
+            throw new TimeoutException($"Static command timed out: {command}");
+        }
+
+        var stdout = await proc.StandardOutput.ReadToEndAsync();
+        if (proc.ExitCode != 0)
+        {
+            var stderr = await proc.StandardError.ReadToEndAsync();
+            throw new InvalidOperationException($"Static command failed with exit code {proc.ExitCode}: {stderr.Trim()}");
+        }
+        return stdout;
+    }
+
+    private static bool IsPortAvailable(int port)
+    {
+        TcpListener? listener = null;
+        try
+        {
+            listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            return true;
+        }
+        catch (SocketException)
+        {
+            return false;
+        }
+        finally
+        {
+            listener?.Stop();
+        }
+    }
 
     private async Task MonitorUntilReadyAsync(bool openBrowserWhenReady, CancellationToken cancellationToken)
     {
@@ -462,16 +513,14 @@ public sealed class HarnessService : IDisposable
             try
             {
                 using var response = await _httpClient.GetAsync(WebUrl, cancellationToken);
-                if ((int)response.StatusCode is >= 200 and < 500)
+                if ((int)response.StatusCode is >= 200 and < 400)
                 {
                     SetState(HarnessState.Running);
-                    LogLauncher("Harness is ready.");
-
+                    LogLauncher($"Harness HTTP readiness confirmed with status {(int)response.StatusCode}.");
                     if (openBrowserWhenReady)
                     {
                         OpenWebInterface();
                     }
-
                     return;
                 }
             }
@@ -495,83 +544,67 @@ public sealed class HarnessService : IDisposable
         }
     }
 
-    private void SetState(HarnessState state)
-    {
-        if (State == state)
-        {
-            return;
-        }
-
-        State = state;
-
-        if (state == HarnessState.Running)
-        {
-            UpdateStatusMessage("Running");
-        }
-        else if (state == HarnessState.Stopped)
-        {
-            UpdateStatusMessage("Stopped");
-        }
-        else if (state == HarnessState.Failed)
-        {
-            UpdateStatusMessage("Failed");
-        }
-
-        StateChanged?.Invoke(this, state);
-    }
-
     private void ProcessLogLine(string line)
     {
-        if (string.IsNullOrWhiteSpace(line))
-        {
-            return;
-        }
-
+        if (string.IsNullOrWhiteSpace(line)) return;
         if (line.Contains("Need to install", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("@deepseek-ai/dsh@", StringComparison.OrdinalIgnoreCase) ||
             line.Contains("npm install", StringComparison.OrdinalIgnoreCase) ||
             line.Contains("reify", StringComparison.OrdinalIgnoreCase) ||
             line.Contains("npm notice", StringComparison.OrdinalIgnoreCase))
         {
             UpdateStatusMessage("Updating packages...");
         }
-        else if (line.Contains("http://127.0.0.1:3080", StringComparison.OrdinalIgnoreCase) ||
-                 line.Contains("dsh web:", StringComparison.OrdinalIgnoreCase))
+    }
+
+    private static async Task StopOwnedProcessAsync(Process? process, string name)
+    {
+        if (process is null)
         {
-            SetState(HarnessState.Running);
-            UpdateStatusMessage("Running");
+            return;
         }
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await process.WaitForExitAsync(cts.Token);
+            }
+        }
+        catch
+        {
+            // Best effort for a process that is already exiting.
+        }
+    }
+
+    private void SetState(HarnessState state)
+    {
+        if (State == state) return;
+        State = state;
+        UpdateStatusMessage(state switch
+        {
+            HarnessState.Running => "Running",
+            HarnessState.Stopped => "Stopped",
+            HarnessState.Failed => "Failed",
+            _ => StatusMessage
+        });
+        StateChanged?.Invoke(this, state);
     }
 
     private void UpdateStatusMessage(string message)
     {
-        if (StatusMessage == message)
-        {
-            return;
-        }
-
+        if (StatusMessage == message) return;
         StatusMessage = message;
         StatusMessageChanged?.Invoke(this, message);
     }
 
     private void OpenFile(string path)
     {
-        if (!File.Exists(path))
-        {
-            File.WriteAllText(path, string.Empty);
-        }
-
-        Process.Start(new ProcessStartInfo
-        {
-            FileName = path,
-            UseShellExecute = true
-        });
+        if (!File.Exists(path)) File.WriteAllText(path, string.Empty);
+        Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
     }
 
-    private void LogLauncher(string message)
-    {
-        AppendLine(_launcherLog, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}");
-    }
+    private void LogLauncher(string message) => AppendLine(_launcherLog, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}");
 
     private void AppendLine(string path, string text)
     {
@@ -583,106 +616,33 @@ public sealed class HarnessService : IDisposable
 
     private static int SafeExitCode(Process? process)
     {
-        try
-        {
-            return process?.ExitCode ?? -1;
-        }
-        catch
-        {
-            return -1;
-        }
+        try { return process?.ExitCode ?? -1; }
+        catch { return -1; }
     }
 
-    private void ThrowIfDisposed()
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-    }
+    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
 
     public void Dispose()
     {
-        if (_disposed)
-        {
-            return;
-        }
-
+        if (_disposed) return;
         _disposed = true;
         _monitorCts?.Cancel();
         _monitorCts?.Dispose();
 
-        if (_installProcess is { HasExited: false })
-        {
-            try
-            {
-                var installPid = _installProcess.Id;
-                using var kill = Process.Start(new ProcessStartInfo
-                {
-                    FileName = "taskkill.exe",
-                    Arguments = $"/PID {installPid} /T /F",
-                    CreateNoWindow = true,
-                    UseShellExecute = false
-                });
-                kill?.WaitForExit(2000);
-            }
-            catch
-            {
-                // Best effort during shutdown
-            }
-        }
-
-        if (_process is { HasExited: false })
-        {
-            try
-            {
-                using var kill = Process.Start(new ProcessStartInfo
-                {
-                    FileName = "taskkill.exe",
-                    Arguments = $"/PID {_process.Id} /T /F",
-                    CreateNoWindow = true,
-                    UseShellExecute = false
-                });
-                kill?.WaitForExit(2000);
-            }
-            catch
-            {
-                // Best effort during shutdown.
-            }
-
-            try
-            {
-                if (!_process.HasExited)
-                {
-                    _process.Kill(entireProcessTree: true);
-                }
-            }
-            catch
-            {
-                // Best effort during process shutdown.
-            }
-        }
-
-        _process?.Dispose();
-        _httpClient.Dispose();
-        KillProcessOnPort(3080);
-        LogLauncher("WPF launcher stopped.");
-    }
-
-    private static void KillProcessOnPort(int port)
-    {
         try
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "cmd.exe",
-                Arguments = $"/c for /f \"tokens=5\" %a in ('netstat -ano -p tcp ^| findstr \":{port}\" ^| findstr \"LISTENING\"') do @taskkill /PID %a /F /T",
-                CreateNoWindow = true,
-                UseShellExecute = false
-            };
-            using var proc = Process.Start(psi);
-            proc?.WaitForExit(2000);
+            if (_installProcess is { HasExited: false }) _installProcess.Kill(entireProcessTree: true);
         }
-        catch
+        catch { }
+        try
         {
-            // Ignore port cleanup errors.
+            if (_process is { HasExited: false }) _process.Kill(entireProcessTree: true);
         }
+        catch { }
+
+        try { _process?.Dispose(); } catch { }
+        _httpClient.Dispose();
+        _actionLock.Dispose();
+        LogLauncher("WPF launcher stopped.");
     }
 }

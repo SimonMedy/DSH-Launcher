@@ -18,15 +18,6 @@ if errorlevel 1 (
     exit /b 1
 )
 
-dotnet --list-sdks | findstr /R /B "10\." >nul 2>&1
-if errorlevel 1 (
-    echo .NET 10 SDK was not found.
-    echo Install the .NET 10 SDK, then run setup.cmd again.
-    echo.
-    pause
-    exit /b 1
-)
-
 if not exist "%PROJECT%" (
     echo Project not found:
     echo %PROJECT%
@@ -35,7 +26,7 @@ if not exist "%PROJECT%" (
     exit /b 1
 )
 
-echo Building DSH Launcher...
+echo Building DSH Launcher using the SDK policy from global.json...
 dotnet publish "%PROJECT%" -c Release -r win-x64 --self-contained true -o "%INSTALL_DIR%"
 if errorlevel 1 (
     echo.
@@ -51,20 +42,7 @@ if not exist "%EXE%" (
     exit /b 1
 )
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ErrorActionPreference='Stop';" ^
-  "$desktop=[Environment]::GetFolderPath('Desktop');" ^
-  "$target='%EXE%';" ^
-  "$shortcutPath=Join-Path $desktop 'DeepSeek Harness.lnk';" ^
-  "$shell=New-Object -ComObject WScript.Shell;" ^
-  "$shortcut=$shell.CreateShortcut($shortcutPath);" ^
-  "$shortcut.TargetPath=$target;" ^
-  "$shortcut.WorkingDirectory=Split-Path $target -Parent;" ^
-  "$shortcut.IconLocation=$target + ',0';" ^
-  "$shortcut.Description='DSH Launcher for DeepSeek Harness';" ^
-  "$shortcut.Save();" ^
-  "Write-Host ''; Write-Host 'Shortcut created:' -ForegroundColor Green; Write-Host $shortcutPath;"
-
+powershell.exe -NoProfile -Command "& { param([string]$Target) $ErrorActionPreference='Stop'; $desktop=[Environment]::GetFolderPath('Desktop'); $shortcutPath=Join-Path $desktop 'DeepSeek Harness.lnk'; $shell=New-Object -ComObject WScript.Shell; $shortcut=$shell.CreateShortcut($shortcutPath); $shortcut.TargetPath=$Target; $shortcut.WorkingDirectory=Split-Path $Target -Parent; $shortcut.IconLocation=$Target + ',0'; $shortcut.Description='DSH Launcher for DeepSeek Harness'; $shortcut.Save(); Write-Host ''; Write-Host 'Shortcut created:' -ForegroundColor Green; Write-Host $shortcutPath }" "%EXE%"
 if errorlevel 1 (
     echo.
     echo Shortcut creation failed.

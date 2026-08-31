@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore tests/DSHLauncher.Tests/DSHLauncher.Tests.csproj
+
+      - name: Build
+        run: dotnet build tests/DSHLauncher.Tests/DSHLauncher.Tests.csproj -c Release --no-restore
+
+      - name: Test security and config invariants
+        run: dotnet test tests/DSHLauncher.Tests/DSHLauncher.Tests.csproj -c Release --no-build --logger "trx;LogFileName=test-results.trx"
+
+      - name: Publish launcher
+        run: dotnet publish src/DSHLauncher/DSHLauncher.csproj -c Release -r win-x64 --self-contained true --no-restore -o artifacts/publish
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: '**/TestResults/**'
+          retention-days: 5
+
+  codeql:
+    name: CodeQL
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      security-events: write
+      packages: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: csharp
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Build
+        run: dotnet build src/DSHLauncher/DSHLauncher.csproj -c Release
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
