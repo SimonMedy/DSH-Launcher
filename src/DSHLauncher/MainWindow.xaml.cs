@@ -40,14 +40,12 @@ public partial class MainWindow : Window
         var screen = Forms.Screen.FromPoint(cursor);
         var source = PresentationSource.FromVisual(this);
         var transform = source?.CompositionTarget?.TransformFromDevice ?? Matrix.Identity;
-
         var cursorDip = transform.Transform(new System.Windows.Point(cursor.X, cursor.Y));
         var workTopLeft = transform.Transform(new System.Windows.Point(screen.WorkingArea.Left, screen.WorkingArea.Top));
         var workBottomRight = transform.Transform(new System.Windows.Point(screen.WorkingArea.Right, screen.WorkingArea.Bottom));
 
         var desiredLeft = cursorDip.X - ActualWidth + 40;
         var desiredTop = cursorDip.Y - ActualHeight;
-
         Left = Math.Clamp(desiredLeft, workTopLeft.X - 4, workBottomRight.X - ActualWidth + 4);
         Top = Math.Clamp(desiredTop, workTopLeft.Y - 4, workBottomRight.Y - ActualHeight + 4);
 
@@ -70,7 +68,6 @@ public partial class MainWindow : Window
     private void UpdateState(HarnessState state)
     {
         StatusText.Text = _harness.StatusMessage;
-
         StatusDot.Fill = state switch
         {
             HarnessState.Running => new SolidColorBrush(System.Windows.Media.Color.FromRgb(77, 214, 170)),
@@ -78,7 +75,6 @@ public partial class MainWindow : Window
             HarnessState.Failed => new SolidColorBrush(System.Windows.Media.Color.FromRgb(255, 107, 125)),
             _ => new SolidColorBrush(System.Windows.Media.Color.FromRgb(111, 138, 157))
         };
-
         var isBusy = _actionInProgress || state == HarnessState.Starting;
 
         OpenButton.IsEnabled = state == HarnessState.Running;
@@ -153,7 +149,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        _actionInProgress = true;
+        _actionInProgress;
         UpdateState(_harness.State);
 
         try
@@ -207,6 +203,18 @@ public partial class MainWindow : Window
 
     private async void StopButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_actionInProgress || _harness.State == HarnessState.Starting)
+        {
+            System.Windows.MessageBox.Show(
+                "DeepSeek Harness is currently starting, installing, updating, or restarting.\n\n" +
+                "Wait for the current operation to finish before exiting. DSH Launcher will not interrupt " +
+                "an npm installation because doing so could leave the global Harness installation incomplete.",
+                "DSH Launcher - Operation in progress",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
         Hide();
 
         try
@@ -215,7 +223,8 @@ public partial class MainWindow : Window
         }
         catch
         {
-            // Ignore error to ensure shutdown proceeds
+            // Ignore errors only after no package/start operation is in progress,
+            // so normal shutdown can still proceed.
         }
 
         System.Windows.Application.Current.Shutdown();
@@ -239,4 +248,3 @@ public partial class MainWindow : Window
         }
     }
 }
-
