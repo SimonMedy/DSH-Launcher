@@ -7,98 +7,112 @@
   <img src="https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square" alt=".NET" />
 </p>
 
-An unofficial community Windows system tray launcher for DeepSeek Harness.
+An unofficial community Windows system tray launcher for DeepSeek Harness. This project is not affiliated with or endorsed by DeepSeek.
 
-This project is not affiliated with or endorsed by DeepSeek.
-
-It starts DeepSeek Harness silently in the background, opens the local web interface when ready, and provides a modern DeepSea WPF popup interface from the system tray with remote access configuration for [DSH-Mobile](https://github.com/SimonMedy/DSH-Mobile).
+DSH Launcher starts DeepSeek Harness in the background, waits for its local HTTP interface, and provides a WPF tray UI for opening, updating, restarting and configuring the service.
 
 <p align="center">
   <img src="assets/dsh-launcher-preview.png" alt="DSH Launcher Demo" width="300" />
 </p>
 
----
-
 ## Features
 
-- DeepSea dark ocean tray popup interface
-- Instant local boot (`dsh web`) with silent background execution
-- Automatic browser launch when web interface is ready
-- System tray controls (open interface, view logs, settings, restart, stop)
-- Built-in **Settings** UI to configure **Trusted Hosts** (Tailscale / LAN / DSH-Mobile)
-- On-demand **Update DeepSeek Harness** feature with automated package management
-- Automatic first-launch dependency installation
-- Reliable process lifecycle management & port cleanup
+- DeepSea WPF tray interface
+- Local `dsh web` lifecycle management
+- Browser launch only after HTTP readiness is confirmed
+- Trusted-authority configuration for DSH Web
+- On-demand DeepSeek Harness update to an exact resolved npm version
+- Automatic first-install when the global DSH package is missing
+- Safe port-collision handling: unrelated processes are never terminated
+- Structured process arguments: settings are not interpolated into a shell command
+- Local launcher and Harness logs
 - Single-instance protection
 
 ## Requirements
 
-- Windows 10 or Windows 11 (x64)
-- .NET 10 SDK (required for building via `setup.cmd`)
-- Node.js installed (`npm` available in `PATH`)
+- Windows 10 or Windows 11 x64
+- .NET 10 SDK for building from source
+- Node.js with `npm` available in `PATH`
 
-DeepSeek Harness is launched natively with:
-
-```text
-dsh web
-```
-
-*(Installed automatically on first launch via `npm install -g @deepseek-ai/dsh@latest`)*
+The repository pins the validated .NET SDK policy through `global.json`.
 
 ## Setup
 
 1. Download or clone this repository.
 2. Keep the folder in a permanent location.
-3. Double-click `setup.cmd`.
-4. The launcher builds automatically and creates a **DeepSeek Harness** shortcut on your desktop.
+3. Run `setup.cmd`.
+4. The launcher builds into `dist/` and creates a **DeepSeek Harness** desktop shortcut.
+
+`setup.cmd` does not request elevation and does not bypass the PowerShell execution policy.
 
 ## Usage
 
-Launch **DeepSeek Harness** from the desktop shortcut.
+Launch **DeepSeek Harness** from the desktop shortcut. The launcher starts the globally installed `@deepseek-ai/dsh` package through its Node.js entrypoint, waits for `http://127.0.0.1:3080`, then keeps the tray controls available.
 
-The launcher will:
+The tray popup provides:
 
-1. Start DeepSeek Harness in the background (with any configured trusted hosts).
-2. Wait for `http://127.0.0.1:3080`.
-3. Open the interface in your default browser.
-4. Keep the tray icon available while Harness is running.
-
-### Tray Menu
-
-Click the tray icon to open the DeepSea popup:
-
-- **Open DeepSeek Harness** (opens `http://127.0.0.1:3080`)
+- **Open DeepSeek Harness**
 - **Open Harness Logs**
 - **Open Launcher Logs**
-- **Settings** (configure remote hostnames & startup options)
-- **Update DeepSeek Harness** (installs latest version on demand)
+- **Settings**
+- **Update DeepSeek Harness**
 - **Restart DeepSeek Harness**
 - **Stop DeepSeek Harness**
 
-Double-clicking the tray icon also opens the web interface directly.
+If TCP port 3080 is already occupied, startup fails safely. DSH Launcher does **not** kill the process using the port.
 
-## Remote Access & DSH-Mobile Setup
+## Trusted authorities and remote access
 
-If you use [DSH-Mobile](https://github.com/SimonMedy/DSH-Mobile) or access Harness over Tailscale / LAN:
+The `--trusted-host` option is a DSH Web browser-trust / authority validation setting. It is **not authentication** and it does **not** by itself expose Harness to another device.
 
-1. Click the tray icon and select **Settings**.
-2. Enter your Tailscale domain name or private IP addresses (one per line, or comma-separated):
-   ```text
-   my-pc.tailnet.ts.net
-   100.x.y.z
-   ```
-3. Click **Save & Restart**.
-4. The launcher will automatically start Harness with:
-   ```text
-   dsh web --trusted-host my-pc.tailnet.ts.net --trusted-host 100.x.y.z
-   ```
+Use trusted authorities only for hostnames or IP authorities that you expect DSH Web to receive, for example:
 
-Configuration is stored locally on your machine at:
-`%LOCALAPPDATA%\DeepSeekHarness\config.json` (outside the Git repository).
+```text
+my-pc.tailnet.ts.net
+100.100.20.30
+192.168.1.50
+host.example:443
+[fd00::1234]:443
+```
+
+DSH Launcher validates these values before saving and again before launching Harness. Schemes, paths, credentials, malformed ports and shell metacharacters are rejected.
+
+For remote access, place Harness behind a trusted network boundary such as Tailscale, WireGuard, or an authenticated reverse proxy. **Do not expose an unauthenticated Harness listener directly to the public Internet.**
+
+A typical Tailscale-style flow is:
+
+1. make the Harness service reachable only through your trusted private network or proxy;
+2. configure the authority that DSH Web will receive, such as your tailnet hostname;
+3. add that authority in DSH Launcher Settings;
+4. save and restart Harness.
+
+Adding a trusted authority alone is not an access-control list and does not authenticate the connecting client.
+
+## Additional CLI arguments
+
+The optional additional-arguments field is tokenized and each token is passed directly to the DSH Node.js process through `ProcessStartInfo.ArgumentList`. It is never concatenated into the `cmd.exe` launch command.
+
+Argument values are intentionally omitted from launcher startup logs. Even so, do not place credentials, API keys or other secrets in command-line arguments because command lines may be observable through the operating system or downstream tooling.
+
+## Harness updates
+
+When **Update DeepSeek Harness** is selected, DSH Launcher first queries npm for the current `@deepseek-ai/dsh` version, validates the returned version string, and then installs that exact version.
+
+This avoids executing a mutable `@latest` target directly in the install command. npm remains the upstream package-distribution trust boundary.
+
+## Configuration
+
+Configuration is stored outside the Git repository at:
+
+```text
+%LOCALAPPDATA%\DeepSeekHarness\config.json
+```
+
+Writes use a temporary file, read-back validation and same-directory replacement. Save failures are surfaced to the user instead of being ignored.
+
+If existing JSON is corrupt, DSH Launcher preserves a timestamped copy and falls back to safe defaults rather than silently overwriting the original configuration.
 
 ## Logs
-
-Logs are stored in:
 
 ```text
 %LOCALAPPDATA%\DeepSeekHarness\logs\
@@ -112,34 +126,36 @@ harness-error.log
 launcher.log
 ```
 
-## Repository Structure
+## Development and CI
+
+Security-sensitive parsing and configuration behavior has automated regression tests under `tests/DSHLauncher.Tests`.
+
+GitHub Actions runs on Windows and performs:
 
 ```text
-.
-├── README.md
-├── LICENSE
-├── setup.cmd
-├── .gitignore
-├── src/
-│   └── DSHLauncher/
-│       ├── App.xaml / App.xaml.cs
-│       ├── MainWindow.xaml / MainWindow.xaml.cs
-│       ├── SettingsWindow.xaml / SettingsWindow.xaml.cs
-│       ├── DSHLauncher.csproj
-│       └── Services/
-│           ├── ConfigService.cs
-│           └── HarnessService.cs
-└── assets/
-    ├── DeepSeekHarness.ico
-    └── dsh-launcher-preview.png
+dotnet restore
+dotnet build
+dotnet test
+dotnet publish
+CodeQL for C#
 ```
 
-- `setup.cmd` builds the WPF app to `dist/` and creates the desktop shortcut.
-- `src/DSHLauncher` contains the modern WPF tray application code.
-- `assets/` contains the application icon and visual assets.
+The CI token is read-only for repository contents except for the `security-events: write` permission required by the CodeQL job.
 
-## Notes
+## Security
 
-This project is only a Windows launcher for DeepSeek Harness. It does not bundle or modify DeepSeek Harness itself.
+See [SECURITY.md](SECURITY.md) for the vulnerability-reporting process and security model.
 
-Stopping the launcher from the tray also terminates the DeepSeek Harness process tree it started.
+Important invariants:
+
+- user-controlled settings are never interpolated into the Harness shell command;
+- only launcher-owned process trees are terminated;
+- an unrelated process listening on port 3080 is left untouched;
+- trusted authorities are validated as authorities, not arbitrary command text;
+- configuration write failures are visible;
+- corrupt configuration is preserved;
+- update installs target an exact validated npm version.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
