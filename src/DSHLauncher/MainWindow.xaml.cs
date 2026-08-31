@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using DSHLauncher.Services;
@@ -43,7 +44,6 @@ public partial class MainWindow : Window
         var cursorDip = transform.Transform(new System.Windows.Point(cursor.X, cursor.Y));
         var workTopLeft = transform.Transform(new System.Windows.Point(screen.WorkingArea.Left, screen.WorkingArea.Top));
         var workBottomRight = transform.Transform(new System.Windows.Point(screen.WorkingArea.Right, screen.WorkingArea.Bottom));
-
         var desiredLeft = cursorDip.X - ActualWidth + 40;
         var desiredTop = cursorDip.Y - ActualHeight;
         Left = Math.Clamp(desiredLeft, workTopLeft.X - 4, workBottomRight.X - ActualWidth + 4);
@@ -75,12 +75,25 @@ public partial class MainWindow : Window
             HarnessState.Failed => new SolidColorBrush(System.Windows.Media.Color.FromRgb(255, 107, 125)),
             _ => new SolidColorBrush(System.Windows.Media.Color.FromRgb(111, 138, 157))
         };
+
         var isBusy = _actionInProgress || state == HarnessState.Starting;
+
+        // Disable the whole action surface while a start/install/update/restart is running.
+        // Child buttons inherit IsEnabled=false and use the existing disabled style.
+        ContentGrid.IsEnabled = !isBusy;
+        ContentGrid.Cursor = isBusy ? Cursors.Arrow : null;
+        ContentGrid.ForceCursor = isBusy;
 
         OpenButton.IsEnabled = state == HarnessState.Running;
         UpdateButton.IsEnabled = !isBusy;
         RestartButton.IsEnabled = !isBusy;
         SettingsButton.IsEnabled = !isBusy;
+    }
+
+    private void SetActionInProgress(bool value)
+    {
+        _actionInProgress = value;
+        UpdateState(_harness.State);
     }
 
     private void Window_Deactivated(object sender, EventArgs e)
@@ -117,10 +130,7 @@ public partial class MainWindow : Window
         {
             if (!_actionInProgress)
             {
-                _actionInProgress = true;
-                RestartButton.IsEnabled = false;
-                UpdateButton.IsEnabled = false;
-
+                SetActionInProgress(true);
                 try
                 {
                     await _harness.RestartAsync();
@@ -135,8 +145,7 @@ public partial class MainWindow : Window
                 }
                 finally
                 {
-                    _actionInProgress = false;
-                    UpdateState(_harness.State);
+                    SetActionInProgress(false);
                 }
             }
         }
@@ -149,9 +158,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        _actionInProgress = true;
-        UpdateState(_harness.State);
-
+        SetActionInProgress(true);
         try
         {
             await _harness.UpdateAsync();
@@ -166,8 +173,7 @@ public partial class MainWindow : Window
         }
         finally
         {
-            _actionInProgress = false;
-            UpdateState(_harness.State);
+            SetSActionInProgress(false);
         }
     }
 
@@ -178,9 +184,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        _actionInProgress = true;
-        RestartButton.IsEnabled = false;
-
+        SetActionInProgress(true);
         try
         {
             await _harness.RestartAsync();
@@ -195,14 +199,15 @@ public partial class MainWindow : Window
         }
         finally
         {
-            _actionInProgress = false;
-            UpdateState(_harness.State);
+            SetActionInProgress(false);
             Hide();
         }
     }
 
     private async void StopButton_Click(object sender, RoutedEventArgs e)
     {
+        // Defense in depth: the action surface is disabled while busy, but retain
+        // this guard in case the handler is invoked programmatically or during a race.
         if (_actionInProgress || _harness.State == HarnessState.Starting)
         {
             System.Windows.MessageBox.Show(
