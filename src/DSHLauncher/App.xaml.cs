@@ -10,6 +10,7 @@ namespace DSHLauncher;
 public partial class App : System.Windows.Application
 {
     private const string MutexName = "Local\\DSHLauncher";
+
     private Mutex? _singleInstanceMutex;
     private Forms.NotifyIcon? _trayIcon;
     private HarnessService? _harness;
@@ -22,7 +23,7 @@ public partial class App : System.Windows.Application
         _singleInstanceMutex = new Mutex(true, MutexName, out var createdNew);
         if (!createdNew)
         {
-            OpenHarnessInBrowser();
+            OpenPublishedHarnessInBrowser();
             Shutdown();
             return;
         }
@@ -33,9 +34,11 @@ public partial class App : System.Windows.Application
             _popup = new MainWindow(_harness);
 
             var executablePath = Environment.ProcessPath
-                ?? throw new InvalidOperationException("The launcher executable path is unavailable.");
+                ?? throw new InvalidOperationException(
+                    "The launcher executable path is unavailable.");
             var appIcon = Icon.ExtractAssociatedIcon(executablePath)
-                ?? throw new InvalidOperationException("The launcher icon could not be loaded.");
+                ?? throw new InvalidOperationException(
+                    "The launcher icon could not be loaded.");
 
             _trayIcon = new Forms.NotifyIcon
             {
@@ -48,34 +51,20 @@ public partial class App : System.Windows.Application
             {
                 if (args.Button is Forms.MouseButtons.Left or Forms.MouseButtons.Right)
                 {
-                    Dispatcher.Invoke(() => TogglePopup());
+                    Dispatcher.Invoke(TogglePopup);
                 }
             };
 
-            _trayIcon.DoubleClick += (_, _) => OpenHarnessInBrowser();
+            _trayIcon.DoubleClick += (_, _) => _harness.OpenWebInterface();
 
-            _harness.StateChanged += (_, state) =>
+            _harness.StateChanged += (_, _) =>
             {
-                Dispatcher.Invoke(() =>
-                {
-                    if (_trayIcon is not null)
-                    {
-                        var text = $"DeepSeek Harness - {_harness.StatusMessage}";
-                        _trayIcon.Text = text.Length > 63 ? text[..63] : text;
-                    }
-                });
+                Dispatcher.Invoke(UpdateTrayText);
             };
 
-            _harness.StatusMessageChanged += (_, msg) =>
+            _harness.StatusMessageChanged += (_, _) =>
             {
-                Dispatcher.Invoke(() =>
-                {
-                    if (_trayIcon is not null)
-                    {
-                        var text = $"DeepSeek Harness - {msg}";
-                        _trayIcon.Text = text.Length > 63 ? text[..63] : text;
-                    }
-                });
+                Dispatcher.Invoke(UpdateTrayText);
             };
 
             await _harness.StartAsync(openBrowserWhenReady: false);
@@ -108,19 +97,41 @@ public partial class App : System.Windows.Application
         _popup.ShowNearTray();
     }
 
-    private static void OpenHarnessInBrowser()
+    private void UpdateTrayText()
+    {
+        if (_trayIcon is null || _harness is null)
+        {
+            return;
+        }
+
+        var text = $"DeepSeek Harness - {_harness.StatusMessage}";
+        _trayIcon.Text = text.Length > 63 ? text[..63] : text;
+    }
+
+    private static void OpenPublishedHarnessInBrowser()
     {
         try
         {
+            if (!HarnessService.TryGetPublishedWebUrl(out var webUrl))
+            {
+                System.Windows.MessageBox.Show(
+                    "DSH Launcher is already running, but its web interface is not ready yet. " +
+                    "Wait for startup to finish and open it from the tray.",
+                    "DSH Launcher",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
             Process.Start(new ProcessStartInfo
             {
-                FileName = HarnessService.WebUrl,
+                FileName = webUrl,
                 UseShellExecute = true
             });
         }
         catch
         {
-            // The running instance will remain available from the tray.
+            // The running instance remains available from the tray.
         }
     }
 
