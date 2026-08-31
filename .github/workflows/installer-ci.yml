@@ -1,0 +1,140 @@
+name: Installer CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore launcher
+        run: dotnet restore src/DSHLauncher/DSHLauncher.csproj -r win-x64
+
+      - name: Publish self-contained launcher
+        run: dotnet publish src/DSHLauncher/DSHLauncher.csproj -c Release -r win-x64 --self-contained true --no-restore -o artifacts/publish
+
+      - name: Download and verify pinned Inno Setup
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '7.1.0'
+          $tag = 'is-7_1_0'
+          $asset = "innosetup-$version-x64.exe"
+          $assetPath = Join-Path $env:RUNNER_TEMP $asset
+
+          gh release download $tag --repo jrsoftware/issrc --pattern $asset --dir $env:RUNNER_TEMP
+          gh release verify-asset $assetPath --repo jrsoftware/issrc
+
+          "INNO_INSTALLER=$assetPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install Inno Setup compiler for current runner user
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $toolDir = Join-Path $env:RUNNER_TEMP 'InnoSetup7'
+          $arguments = @(
+            '/CURRENTUSER',
+            '/VERYSILENT',
+            '/SUPPRESSMSGBOXES',
+            '/NORESTART',
+            '/SP-',
+            "/DIR=`"$toolDir`""
+          )
+
+          $process = Start-Process -FilePath $env:INNO_INSTALLER -ArgumentList $arguments -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Inno Setup installation failed with exit code $($process.ExitCode)."
+          }
+
+          $iscc = Join-Path $toolDir 'ISCC.exe'
+          if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
+            throw "ISCC.exe was not found at the expected verified tool location."
+          }
+
+          "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path artifacts/installer | Out-Null
+          $version = "0.0.$env:GITHUB_RUN_NUMBER"
+          & $env:ISCC "/DMyAppVersion=$version" installer/DSHLauncher.iss
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup compilation failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Smoke test silent install and uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Get-ChildItem artifacts/installer/DSHLauncher-Setup-*.exe | Select-Object -Single
+          $testInstallDir = Join-Path $env:LOCALAPPDATA 'Programs\DSH Launcher CI Test'
+
+          $installArgs = @(
+            '/CURRENTUSER',
+            '/VERYSILENT',
+            '/SUPPRESSMSGBOXES',
+            '/NORESTART',
+            '/SP-',
+            "/DIR=`"$testInstallDir`""
+          )
+          $install = Start-Process -FilePath $setup.FullName -ArgumentList $installArgs -Wait -PassThru
+          if ($install.ExitCode -ne 0) {
+            throw "Installer smoke test failed with exit code $($install.ExitCode)."
+          }
+
+          $installedExe = Join-Path $testInstallDir 'DSHLauncher.exe'
+          $uninstaller = Join-Path $testInstallDir 'unins000.exe'
+          if (-not (Test-Path -LiteralPath $installedExe -PathType Leaf)) {
+            throw 'Installed launcher executable was not found.'
+          }
+          if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
+            throw 'Uninstaller was not created.'
+          }
+
+          $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) {
+            throw "Uninstaller smoke test failed with exit code $($uninstall.ExitCode)."
+          }
+          if (Test-Path -LiteralPath $installedExe) {
+            throw 'Launcher executable remained after uninstall.'
+          }
+
+      - name: Generate SHA-256 checksum
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Get-ChildItem artifacts/installer/DSHLauncher-Setup-*.exe | Select-Object -Single
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup.FullName).Hash.ToLowerInvariant()
+          "$hash  $($setup.Name)" | Set-Content -Encoding ascii "$($setup.FullName).sha256"
+
+      - name: Upload installer validation artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-installer
+          path: |
+            artifacts/installer/DSHLauncher-Setup-*.exe
+            artifacts/installer/DSHLauncher-Setup-*.exe.sha256
+          retention-days: 5
