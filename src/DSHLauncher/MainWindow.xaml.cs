@@ -149,7 +149,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        _actionInProgress;
+        _actionInProgress = true;
         UpdateState(_harness.State);
 
         try
