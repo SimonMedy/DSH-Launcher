@@ -26,7 +26,7 @@ The installer CI job:
 1. restores and publishes the launcher self-contained for `win-x64`;
 2. downloads and verifies the pinned Inno Setup compiler installer;
 3. compiles `DSHLauncher.iss`;
-4. performs a silent install/uninstall smoke test in the runner's per-user profile;
+4. requires exactly one generated setup executable, then performs a silent install/uninstall smoke test in the runner's per-user profile;
 5. emits a SHA-256 checksum next to the setup executable;
 6. uploads the setup executable and checksum as a short-lived CI artifact.
 
