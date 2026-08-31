@@ -89,13 +89,16 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $setup = Get-ChildItem artifacts/installer/DSHLauncher-Setup-*.exe | Select-Object -Single
+          $setups = @(Get-ChildItem artifacts/installer/DSHLauncher-Setup-*.exe)
+          if ($setups.Count -ne 1) {
+            throw "Expected exactly one installer, found $($setups.Count)."
+          }
+          $setup = $setups[0]
           $testInstallDir = Join-Path $env:LOCALAPPDATA 'Programs\DSH Launcher CI Test'
 
           $installArgs = @(
-            '/CURRENTUSER',
             '/VERYSILENT',
-            '/SUPPRESSMSGBOXES',
+            '/SUPPRESSMSGBOXEU',
             '/NORESTART',
             '/SP-',
             "/DIR=`"$testInstallDir`""
@@ -126,7 +129,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $setup = Get-ChildItem artifacts/installer/DSHLauncher-Setup-*.exe | Select-Object -Single
+          $setups = @(Get-ChildItem artifacts/installer/DSHLauncher-Setup-*.exe)
+          if ($setups.Count -ne 1) {
+            throw "Expected exactly one installer, found $($setups.Count)."
+          }
+          $setup = $setups[0]
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup.FullName).Hash.ToLowerInvariant()
           "$hash  $($setup.Name)" | Set-Content -Encoding ascii "$($setup.FullName).sha256"
 
