@@ -9,7 +9,7 @@
 
 An unofficial community Windows system tray launcher for DeepSeek Harness. This project is not affiliated with or endorsed by DeepSeek.
 
-DSH Launcher starts DeepSeek Harness in the background, waits for its local HTTP interface, and provides a WPF tray UI for opening, updating, restarting and configuring the service.
+DSH Launcher starts DeepSeek Harness in the background, waits for a validated local startup announcement and HTTP readiness, and provides a WPF tray UI for opening, updating, restarting and configuring the service.
 
 <p align="center">
   <img src="assets/dsh-launcher-preview.png" alt="DSH Launcher Demo" width="300" />
@@ -19,13 +19,16 @@ DSH Launcher starts DeepSeek Harness in the background, waits for its local HTTP
 
 - DeepSea WPF tray interface
 - Local `dsh web` lifecycle management
-- Browser launch only after HTTP readiness is confirmed
+- Loopback-only DSH Web binding (`127.0.0.1`)
+- Browser launch only after validated startup + HTTP readiness
+- Safe fallback to an OS-assigned free port when 3080 is occupied
 - Trusted-authority configuration for DSH Web
 - On-demand DeepSeek Harness update to an exact resolved npm version
+- No-op update detection when the installed DSH version is already current
 - Automatic first-install when the global DSH package is missing
-- Safe port-collision handling: unrelated processes are never terminated
+- Safe process ownership: unrelated processes are never terminated
 - Structured process arguments: settings are not interpolated into a shell command
-- Local launcher and Harness logs
+- Bounded, rotated local logs with token-like value redaction
 - Single-instance protection
 
 ## Requirements
@@ -34,7 +37,7 @@ DSH Launcher starts DeepSeek Harness in the background, waits for its local HTTP
 - .NET 10 SDK for building from source
 - Node.js with `npm` available in `PATH`
 
-The repository pins the validated .NET SDK policy through `global.json`.
+The repository pins its .NET 10 SDK policy through `global.json`.
 
 ## Setup
 
@@ -47,19 +50,11 @@ The repository pins the validated .NET SDK policy through `global.json`.
 
 ## Usage
 
-Launch **DeepSeek Harness** from the desktop shortcut. The launcher starts the globally installed `@deepseek-ai/dsh` package through its Node.js entrypoint, waits for `http://127.0.0.1:3080`, then keeps the tray controls available.
+Launch **DeepSeek Harness** from the desktop shortcut. The launcher resolves the globally installed `@deepseek-ai/dsh` Node.js entrypoint and starts DSH directly without placing settings in a shell command.
 
-The tray popup provides:
+DSH Launcher owns the browser handoff and passes `--no-open` to DSH. It waits for the process-specific `dsh web:` startup announcement, validates that the announced URL is loopback-only, and then verifies HTTP readiness before enabling **Open DeepSeek Harness**.
 
-- **Open DeepSeek Harness**
-- **Open Harness Logs**
-- **Open Launcher Logs**
-- **Settings**
-- **Update DeepSeek Harness**
-- **Restart DeepSeek Harness**
-- **Stop DeepSeek Harness**
-
-If TCP port 3080 is already occupied, startup fails safely. DSH Launcher does **not** kill the process using the port.
+If TCP port 3080 is already occupied, the existing listener is left untouched. DSH is started with `--port 0`, allowing Windows to allocate a free loopback port. The tray status shows the actual port when it differs from 3080.
 
 ## Trusted authorities and remote access
 
@@ -77,28 +72,47 @@ host.example:443
 
 DSH Launcher validates these values before saving and again before launching Harness. Schemes, paths, credentials, malformed ports and shell metacharacters are rejected.
 
-For remote access, place Harness behind a trusted network boundary such as Tailscale, WireGuard, or an authenticated reverse proxy. **Do not expose an unauthenticated Harness listener directly to the public Internet.**
+The launcher itself forces the DSH Web bind host to `127.0.0.1`. Free-form additional arguments cannot override `--host` or `--trusted-host`; trusted authorities must be configured through the dedicated Settings field.
 
-A typical Tailscale-style flow is:
-
-1. make the Harness service reachable only through your trusted private network or proxy;
-2. configure the authority that DSH Web will receive, such as your tailnet hostname;
-3. add that authority in DSH Launcher Settings;
-4. save and restart Harness.
-
-Adding a trusted authority alone is not an access-control list and does not authenticate the connecting client.
+For remote access, place the loopback Harness endpoint behind a trusted network boundary such as Tailscale, WireGuard, or an authenticated reverse proxy. **Do not expose an unauthenticated Harness listener directly to the public Internet.**
 
 ## Additional CLI arguments
 
-The optional additional-arguments field is tokenized and each token is passed directly to the DSH Node.js process through `ProcessStartInfo.ArgumentList`. It is never concatenated into the `cmd.exe` launch command.
+Additional arguments are tokenized and each token is passed directly to the DSH Node.js process through `ProcessStartInfo.ArgumentList`.
+
+Launcher-owned options are handled specially:
+
+- `--host` is rejected and remains fixed to `127.0.0.1`;
+- `--trusted-host` is rejected in free-form arguments and must use the trusted-authority UI;
+- `--port` / `--port=...` is parsed and validated by the launcher, including `--port 0`;
+- `--no-open` is redundant because DSH Launcher always owns browser handoff.
 
 Argument values are intentionally omitted from launcher startup logs. Even so, do not place credentials, API keys or other secrets in command-line arguments because command lines may be observable through the operating system or downstream tooling.
 
+## Authenticated browser handoff
+
+Some newer DeepSeek Harness builds can announce a browser URL containing an authentication/bootstrap token. DSH Launcher treats that URL as sensitive runtime state:
+
+- the full handoff URL is kept in memory only;
+- the token-bearing URL is never written to `runtime.json`;
+- startup log lines are sanitized before persistence;
+- generic token-like query values are redacted from logs;
+- readiness probes use the clean loopback origin, so they do not consume or replay the browser token;
+- the in-memory authenticated URL is used only when the user asks the running launcher to open DSH.
+
+A second launcher invocation does not persist or reconstruct authenticated handoff tokens. If an authenticated handoff is required, use the already-running tray instance to open DSH safely.
+
 ## Harness updates
 
-When **Update DeepSeek Harness** is selected, DSH Launcher first queries npm for the current `@deepseek-ai/dsh` version, validates the returned version string, and then installs that exact version.
+When **Update DeepSeek Harness** is selected, DSH Launcher first queries npm for `@deepseek-ai/dsh`'s `dist-tags.latest`, validates the returned version, and compares it with the installed package version.
 
-This avoids executing a mutable `@latest` target directly in the install command. npm remains the upstream package-distribution trust boundary.
+If both versions are identical, the update is skipped and the running Harness process is left untouched. Otherwise the launcher installs the exact resolved version, for example:
+
+```text
+npm install -g @deepseek-ai/dsh@0.1.1-rc.2
+```
+
+The mutable `@latest` target is never placed directly in the install command. npm remains the upstream package-distribution trust boundary.
 
 ## Configuration
 
@@ -110,7 +124,7 @@ Configuration is stored outside the Git repository at:
 
 Writes use a temporary file, read-back validation and same-directory replacement. Save failures are surfaced to the user instead of being ignored.
 
-If existing JSON is corrupt, DSH Launcher preserves a timestamped copy and falls back to safe defaults rather than silently overwriting the original configuration.
+If existing JSON is corrupt, DSH Launcher preserves a timestamped copy, uses safe defaults and displays a recovery warning rather than silently overwriting the original configuration.
 
 ## Logs
 
@@ -126,21 +140,13 @@ harness-error.log
 launcher.log
 ```
 
+Each active log is capped at approximately 5 MiB and rotates to a single `.1` backup. Token-like values are redacted on write, but logs can still contain ordinary upstream DSH output; review them before sharing publicly.
+
 ## Development and CI
 
-Security-sensitive parsing and configuration behavior has automated regression tests under `tests/DSHLauncher.Tests`.
+Security-sensitive parsing, configuration, update-version handling and runtime-endpoint behavior have automated regression tests under `tests/DSHLauncher.Tests`.
 
-GitHub Actions runs on Windows and performs:
-
-```text
-dotnet restore
-dotnet build
-dotnet test
-dotnet publish
-CodeQL for C#
-```
-
-The CI token is read-only for repository contents except for the `security-events: write` permission required by the CodeQL job.
+GitHub Actions runs on Windows and performs restore, build, tests, self-contained `win-x64` publish, and CodeQL analysis. Third-party Actions are pinned to immutable commit SHAs, and Dependabot proposes grouped updates for Actions and NuGet test dependencies.
 
 ## Security
 
@@ -149,12 +155,14 @@ See [SECURITY.md](SECURITY.md) for the vulnerability-reporting process and secur
 Important invariants:
 
 - user-controlled settings are never interpolated into the Harness shell command;
+- DSH Web is bound to loopback by the launcher;
+- trusted authorities are validated and cannot be bypassed through free-form `--trusted-host` arguments;
 - only launcher-owned process trees are terminated;
-- an unrelated process listening on port 3080 is left untouched;
-- trusted authorities are validated as authorities, not arbitrary command text;
-- configuration write failures are visible;
-- corrupt configuration is preserved;
-- update installs target an exact validated npm version.
+- unrelated port owners are left untouched;
+- authenticated startup tokens are kept out of persistent launcher state and logs;
+- configuration write failures and corruption recovery are visible;
+- npm installs target an exact validated version and are skipped when already current;
+- CI Actions are pinned to immutable SHAs.
 
 ## License
 
