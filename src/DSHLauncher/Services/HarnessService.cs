@@ -373,23 +373,106 @@ public sealed class HarnessService : IDisposable
         await StartAsync(openBrowserWhenReady: !isUpdate);
     }
 
-    private async Task<string> ResolveLatestVersionAsync()
+    public static string? ExtractVersionFromJson(string output)
     {
-        var output = await RunStaticCommandAsync(
-            "npm view @deepseek-ai/dsh version --json",
-            TimeSpan.FromSeconds(30));
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return null;
+        }
 
-        string? version;
         try
         {
-            version = JsonSerializer.Deserialize<string>(output.Trim());
+            using var doc = JsonDocument.Parse(output.Trim());
+            var root = doc.RootElement;
+
+            if (root.ValueKind == JsonValueKind.String)
+            {
+                var val = root.GetString();
+                if (!string.IsNullOrWhiteSpace(val) && PackageVersionPattern.IsMatch(val))
+                {
+                    return val;
+                }
+            }
+
+            if (root.ValueKind == JsonValueKind.Array)
+            {
+                string? singleMatch = null;
+                foreach (var item in root.EnumerateArray())
+                {
+                    if (item.ValueKind == JsonValueKind.String)
+                    {
+                        var val = item.GetString();
+                        if (!string.IsNullOrWhiteSpace(val) && PackageVersionPattern.IsMatch(val))
+                        {
+                            if (singleMatch is not null && !string.Equals(singleMatch, val, StringComparison.Ordinal))
+                            {
+                                return null;
+                            }
+                            singleMatch = val;
+                        }
+                    }
+                    else if (item.ValueKind == JsonValueKind.Object &&
+                             item.TryGetProperty("latest", out var latestProp) &&
+                             latestProp.ValueKind == JsonValueKind.String)
+                    {
+                        var val = latestProp.GetString();
+                        if (!string.IsNullOrWhiteSpace(val) && PackageVersionPattern.IsMatch(val))
+                        {
+                            if (singleMatch is not null && !string.Equals(singleMatch, val, StringComparison.Ordinal))
+                            {
+                                return null;
+                            }
+                            singleMatch = val;
+                        }
+                    }
+                }
+
+                return singleMatch;
+            }
+
+            if (root.ValueKind == JsonValueKind.Object &&
+                root.TryGetProperty("latest", out var objLatest) &&
+                objLatest.ValueKind == JsonValueKind.String)
+            {
+                var val = objLatest.GetString();
+                if (!string.IsNullOrWhiteSpace(val) && PackageVersionPattern.IsMatch(val))
+                {
+                    return val;
+                }
+            }
         }
         catch (JsonException)
         {
-            version = output.Trim().Trim('"');
+            // Fallback to line by line text parsing
         }
 
-        if (string.IsNullOrWhiteSpace(version) || !PackageVersionPattern.IsMatch(version))
+        var lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        string? textMatch = null;
+        foreach (var line in lines)
+        {
+            var cleaned = line.Trim().Trim('"', '\'', '[', ']', ',');
+            if (!string.IsNullOrWhiteSpace(cleaned) && PackageVersionPattern.IsMatch(cleaned))
+            {
+                if (textMatch is not null && !string.Equals(textMatch, cleaned, StringComparison.Ordinal))
+                {
+                    return null;
+                }
+                textMatch = cleaned;
+            }
+        }
+
+        return textMatch;
+    }
+
+    private async Task<string> ResolveLatestVersionAsync()
+    {
+        var output = await RunStaticCommandAsync(
+            "npm view @deepseek-ai/dsh dist-tags.latest --json",
+            TimeSpan.FromSeconds(30));
+
+        var version = ExtractVersionFromJson(output);
+
+        if (string.IsNullOrWhiteSpace(version))
         {
             throw new InvalidDataException(
                 "npm returned an invalid package version. Update aborted before executing an install command.");

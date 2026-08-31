@@ -87,4 +87,29 @@ public sealed class SecurityTests
             if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
         }
     }
+
+    [Theory]
+    [InlineData("\"0.1.1-rc.2\"", "0.1.1-rc.2")]
+    [InlineData("[\n  \"0.1.1-rc.2\"\n]", "0.1.1-rc.2")]
+    [InlineData("[\n  {\n    \"latest\": \"0.1.1-rc.2\"\n  }\n]", "0.1.1-rc.2")]
+    [InlineData("{\n  \"latest\": \"1.2.3\"\n}", "1.2.3")]
+    [InlineData("0.1.1-rc.2", "0.1.1-rc.2")]
+    public void ExtractVersionFromJson_ParsesValidFormats(string input, string expected)
+    {
+        var version = HarnessService.ExtractVersionFromJson(input);
+        Assert.Equal(expected, version);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("null")]
+    [InlineData("[]")]
+    [InlineData("[\"1.0.0\", \"2.0.0\"]")]
+    [InlineData("\"invalid-version\"")]
+    [InlineData("foo && rm -rf /")]
+    public void ExtractVersionFromJson_RejectsInvalidOrUnsafeFormats(string input)
+    {
+        var version = HarnessService.ExtractVersionFromJson(input);
+        Assert.Null(version);
+    }
 }
