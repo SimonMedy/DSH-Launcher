@@ -81,7 +81,7 @@ public partial class MainWindow : Window
         // Disable the whole action surface while a start/install/update/restart is running.
         // Child buttons inherit IsEnabled=false and use the existing disabled style.
         ContentGrid.IsEnabled = !isBusy;
-        ContentGrid.Cursor = isBusy ? Cursors.Arrow : null;
+        ContentGrid.Cursor = isBusy ? System.Windows.Input.Cursors.Arrow : null;
         ContentGrid.ForceCursor = isBusy;
 
         OpenButton.IsEnabled = state == HarnessState.Running;
@@ -173,7 +173,7 @@ public partial class MainWindow : Window
         }
         finally
         {
-            SetSActionInProgress(false);
+            SetActionInProgress(false);
         }
     }
 
