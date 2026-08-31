@@ -14,7 +14,6 @@
         UseLayoutRounding="True"
         SnapsToDevicePixels="True"
         MouseLeftButtonDown="Window_MouseLeftButtonDown">
-
     <Window.Resources>
         <SolidColorBrush x:Key="TextPrimary" Color="#F7FBFF"/>
         <SolidColorBrush x:Key="TextSecondary" Color="#90A7BD"/>
@@ -24,7 +23,6 @@
         <SolidColorBrush x:Key="Separator" Color="#24445D"/>
         <SolidColorBrush x:Key="CardBackground" Color="#0D2235"/>
         <SolidColorBrush x:Key="CardBorderBrush" Color="#2A5878"/>
-
         <Style x:Key="CloseButtonStyle" TargetType="Button">
             <Setter Property="Width" Value="32"/>
             <Setter Property="Height" Value="32"/>
@@ -51,7 +49,6 @@
                 </Setter.Value>
             </Setter>
         </Style>
-
         <Style x:Key="PrimaryButtonStyle" TargetType="Button">
             <Setter Property="Height" Value="38"/>
             <Setter Property="MinWidth" Value="110"/>
@@ -85,7 +82,6 @@
                 </Setter.Value>
             </Setter>
         </Style>
-
         <Style x:Key="SecondaryButtonStyle" TargetType="Button">
             <Setter Property="Height" Value="38"/>
             <Setter Property="MinWidth" Value="80"/>
@@ -120,7 +116,6 @@
             </Setter>
         </Style>
     </Window.Resources>
-
     <Grid Margin="14">
         <Border x:Name="CardBorder"
                 CornerRadius="18"
@@ -134,7 +129,6 @@
                                   Opacity="0.5"
                                   Color="#000A12"/>
             </Border.Effect>
-
             <Grid x:Name="ContentGrid">
                 <Grid.Background>
                     <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
@@ -143,8 +137,6 @@
                         <GradientStop Color="#071723" Offset="1"/>
                     </LinearGradientBrush>
                 </Grid.Background>
-
-                <!-- ambient deepsea glows -->
                 <Ellipse Width="240"
                          Height="240"
                          HorizontalAlignment="Right"
@@ -158,7 +150,6 @@
                         </RadialGradientBrush>
                     </Ellipse.Fill>
                 </Ellipse>
-
                 <Grid Margin="22,18,22,18">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -167,15 +158,12 @@
                         <RowDefinition Height="1"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-
-                    <!-- Header -->
                     <Grid Grid.Row="0" Margin="0,0,0,14">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="38"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-
                         <Border Width="34"
                                 Height="34"
                                 CornerRadius="10"
@@ -195,46 +183,38 @@
                                    HorizontalAlignment="Center"
                                    VerticalAlignment="Center"/>
                         </Border>
-
                         <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
                             <TextBlock Text="Settings"
                                        Foreground="{StaticResource TextPrimary}"
                                        FontFamily="{StaticResource UiFont}"
                                        FontSize="16"
                                        FontWeight="SemiBold"/>
-                            <TextBlock Text="Configure trusted hosts &amp; startup options"
+                            <TextBlock Text="Configure browser trust &amp; startup options"
                                        Foreground="{StaticResource TextSecondary}"
                                        FontFamily="{StaticResource UiFont}"
                                        FontSize="12"/>
                         </StackPanel>
-
                         <Button Grid.Column="2"
                                 Content="×"
                                 Style="{StaticResource CloseButtonStyle}"
                                 Click="CancelButton_Click"/>
                     </Grid>
-
                     <Border Grid.Row="1" Background="{StaticResource Separator}" Opacity="0.7"/>
-
-                    <!-- Form Content -->
                     <ScrollViewer Grid.Row="2"
                                   Margin="0,14,0,14"
                                   VerticalScrollBarVisibility="Auto">
                         <StackPanel>
-                            <!-- Trusted Hosts Section -->
-                            <TextBlock Text="Trusted Hosts (DSH-Mobile &amp; Remote Access)"
+                            <TextBlock Text="Trusted Authorities (Browser Trust)"
                                        Foreground="{StaticResource TextPrimary}"
                                        FontFamily="{StaticResource UiFont}"
                                        FontSize="13"
                                        FontWeight="SemiBold"/>
-
-                            <TextBlock Text="Hostnames or IPs allowed to reach DSH Web remotely (one per line):"
+                            <TextBlock Text="Accepted DSH Web host/IP authorities. This is not client authentication or network access control."
                                        Foreground="{StaticResource TextSecondary}"
                                        FontFamily="{StaticResource UiFont}"
                                        FontSize="11"
                                        Margin="0,3,0,8"
                                        TextWrapping="Wrap"/>
-
                             <Border CornerRadius="8"
                                     Background="{StaticResource CardBackground}"
                                     BorderBrush="{StaticResource CardBorderBrush}"
@@ -252,26 +232,29 @@
                                          FontFamily="Consolas, Cascadia Code, Courier New"
                                          FontSize="12"/>
                             </Border>
-
-                            <TextBlock Text="Examples: my-pc.tailnet.ts.net, 100.115.92.10, 192.168.1.50"
+                            <TextBlock Text="Examples: my-pc.tailnet.ts.net, 100.115.92.10, host.example:443, [fd00::1234]:443"
                                        Foreground="{StaticResource TextMuted}"
                                        FontFamily="{StaticResource UiFont}"
                                        FontSize="11"
-                                       Margin="2,5,0,16"/>
-
-                            <!-- Custom CLI Args Section -->
+                                       TextWrapping="Wrap"
+                                       Margin="2,5,0,4"/>
+                            <TextBlock Text="For remote access, use a trusted private network or authenticated reverse proxy. Never expose an unauthenticated Harness listener directly to the public Internet."
+                                       Foreground="{StaticResource TextMuted}"
+                                       FontFamily="{StaticResource UiFont}"
+                                       FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Margin="2,0,0,16"/>
                             <TextBlock Text="Additional CLI Arguments (Optional)"
                                        Foreground="{StaticResource TextPrimary}"
                                        FontFamily="{StaticResource UiFont}"
                                        FontSize="13"
                                        FontWeight="SemiBold"/>
-
-                            <TextBlock Text="Extra flags appended to dsh web command:"
+                            <TextBlock Text="Arguments are tokenized and passed directly to DSH; do not enter secrets."
                                        Foreground="{StaticResource TextSecondary}"
                                        FontFamily="{StaticResource UiFont}"
                                        FontSize="11"
+                                       TextWrapping="Wrap"
                                        Margin="0,3,0,8"/>
-
                             <Border CornerRadius="8"
                                     Background="{StaticResource CardBackground}"
                                     BorderBrush="{StaticResource CardBorderBrush}"
@@ -287,10 +270,7 @@
                             </Border>
                         </StackPanel>
                     </ScrollViewer>
-
                     <Border Grid.Row="3" Background="{StaticResource Separator}" Opacity="0.7"/>
-
-                    <!-- Footer Actions -->
                     <Grid Grid.Row="4" Margin="0,14,0,0">
                         <Button HorizontalAlignment="Left"
                                 Style="{StaticResource SecondaryButtonStyle}"
@@ -300,13 +280,11 @@
                                 <TextBlock Text="Open config.json" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>
-
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                             <Button Content="Cancel"
                                     Style="{StaticResource SecondaryButtonStyle}"
                                     Margin="0,0,8,0"
                                     Click="CancelButton_Click"/>
-
                             <Button Content="Save &amp; Restart"
                                     Style="{StaticResource PrimaryButtonStyle}"
                                     Click="SaveButton_Click"/>
