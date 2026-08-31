@@ -21,7 +21,8 @@ public sealed class HarnessService : IDisposable
     public const string DefaultWebUrl = HarnessEndpoint.DefaultWebUrl;
 
     private const string PackageName = "@deepseek-ai/dsh";
-    private static readonly TimeSpan DynamicPortDiscoveryTimeout = TimeSpan.FromSeconds(45);
+    private const long MaximumLogBytes = 5 * 1024 * 1024;
+    private static readonly TimeSpan StartupAnnouncementTimeout = TimeSpan.FromSeconds(45);
 
     private static readonly Regex PackageVersionPattern = new(
         "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$",
@@ -35,12 +36,14 @@ public sealed class HarnessService : IDisposable
     private readonly string _harnessErrorLog;
     private readonly SemaphoreSlim _actionLock = new(1, 1);
     private readonly RuntimeEndpointStore _runtimeEndpointStore = new();
+    private readonly long _launcherStartTimeUtcTicks;
 
     private Process? _process;
     private Process? _installProcess;
     private CancellationTokenSource? _monitorCts;
-    private TaskCompletionSource<int>? _dynamicPortSource;
+    private TaskCompletionSource<HarnessStartupAnnouncement>? _startupAnnouncementSource;
     private int? _activeWebPort;
+    private string? _browserLaunchUrl;
     private int _requestedWebPort = HarnessEndpoint.PreferredPort;
     private bool _stopping;
     private bool _disposed;
@@ -69,6 +72,17 @@ public sealed class HarnessService : IDisposable
         }
     }
 
+    private string? BrowserLaunchUrl
+    {
+        get
+        {
+            lock (_endpointLock)
+            {
+                return _browserLaunchUrl;
+            }
+        }
+    }
+
     public event EventHandler<HarnessState>? StateChanged;
     public event EventHandler<string>? StatusMessageChanged;
 
@@ -83,6 +97,9 @@ public sealed class HarnessService : IDisposable
         _launcherLog = Path.Combine(logDirectory, "launcher.log");
         _harnessLog = Path.Combine(logDirectory, "harness.log");
         _harnessErrorLog = Path.Combine(logDirectory, "harness-error.log");
+
+        using var currentProcess = Process.GetCurrentProcess();
+        _launcherStartTimeUtcTicks = currentProcess.StartTime.ToUniversalTime().Ticks;
 
         _runtimeEndpointStore.Clear();
         LogLauncher("WPF launcher starting.");
@@ -135,11 +152,16 @@ public sealed class HarnessService : IDisposable
 
         _stopping = false;
         _runtimeEndpointStore.Clear();
-        SetActiveWebPort(null);
+        SetActiveEndpoint(null, null);
         SetState(HarnessState.Starting);
         UpdateStatusMessage("Starting");
 
         var config = Config.Load();
+        if (!string.IsNullOrWhiteSpace(Config.LastRecoveryWarning))
+        {
+            LogLauncher($"Configuration recovery warning: {Config.LastRecoveryWarning}");
+        }
+
         var authorities = ValidateAuthorities(config.TrustedHosts);
 
         if (!CommandLineTokenizer.TryTokenize(
@@ -152,28 +174,20 @@ public sealed class HarnessService : IDisposable
             throw new InvalidDataException(customArgsError);
         }
 
-        if (!HarnessEndpoint.TryExtractPortOverride(
+        if (!HarnessEndpoint.TryFilterLauncherOwnedArguments(
                 customArgs,
                 out var explicitPort,
                 out var remainingCustomArgs,
-                out var portError))
+                out var argumentError))
         {
             SetState(HarnessState.Failed);
-            UpdateStatusMessage("Invalid port argument");
-            throw new InvalidDataException(portError);
+            UpdateStatusMessage("Invalid additional arguments");
+            throw new InvalidDataException(argumentError);
         }
 
         _requestedWebPort = ResolveRequestedWebPort(explicitPort);
-        if (_requestedWebPort == 0)
-        {
-            _dynamicPortSource = new TaskCompletionSource<int>(
-                TaskCreationOptions.RunContinuationsAsynchronously);
-        }
-        else
-        {
-            _dynamicPortSource = null;
-            SetActiveWebPort(_requestedWebPort);
-        }
+        _startupAnnouncementSource = new TaskCompletionSource<HarnessStartupAnnouncement>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
 
         var runtime = ResolveDshRuntime()
             ?? throw new InvalidOperationException(
@@ -188,7 +202,7 @@ public sealed class HarnessService : IDisposable
             $"and port {(_requestedWebPort == 0 ? "assigned by Windows" : _requestedWebPort.ToString(CultureInfo.InvariantCulture))}.");
 
         LogLauncher(
-            $"Starting Harness via node.exe with {authorities.Count} trusted authorities, " +
+            $"Starting Harness via node.exe on loopback with {authorities.Count} trusted authorities, " +
             $"{remainingCustomArgs.Count} additional arguments, and " +
             $"{(_requestedWebPort == 0 ? "an OS-assigned port" : $"port {_requestedWebPort}")}. " +
             "Argument values are intentionally not logged.");
@@ -205,8 +219,11 @@ public sealed class HarnessService : IDisposable
 
         startInfo.ArgumentList.Add(runtime.Entrypoint);
         startInfo.ArgumentList.Add("web");
+        startInfo.ArgumentList.Add("--host");
+        startInfo.ArgumentList.Add(HarnessEndpoint.LoopbackHost);
         startInfo.ArgumentList.Add("--port");
         startInfo.ArgumentList.Add(_requestedWebPort.ToString(CultureInfo.InvariantCulture));
+        startInfo.ArgumentList.Add("--no-open");
 
         foreach (var host in authorities)
         {
@@ -240,8 +257,8 @@ public sealed class HarnessService : IDisposable
             SetState(HarnessState.Failed);
             _process.Dispose();
             _process = null;
-            _dynamicPortSource = null;
-            SetActiveWebPort(null);
+            _startupAnnouncementSource = null;
+            SetActiveEndpoint(null, null);
             throw;
         }
 
@@ -251,10 +268,7 @@ public sealed class HarnessService : IDisposable
 
         try
         {
-            await MonitorUntilReadyAsync(
-                openBrowserWhenReady,
-                _requestedWebPort,
-                _monitorCts.Token);
+            await MonitorUntilReadyAsync(openBrowserWhenReady, _monitorCts.Token);
         }
         catch
         {
@@ -277,7 +291,7 @@ public sealed class HarnessService : IDisposable
         ThrowIfDisposed();
         _stopping = true;
         _monitorCts?.Cancel();
-        _dynamicPortSource?.TrySetCanceled();
+        _startupAnnouncementSource?.TrySetCanceled();
 
         try
         {
@@ -323,9 +337,9 @@ public sealed class HarnessService : IDisposable
         {
             try { _process?.Dispose(); } catch { }
             _process = null;
-            _dynamicPortSource = null;
+            _startupAnnouncementSource = null;
             _stopping = false;
-            SetActiveWebPort(null);
+            SetActiveEndpoint(null, null);
             _runtimeEndpointStore.Clear();
             SetState(HarnessState.Stopped);
             LogLauncher("Harness stopped.");
@@ -334,15 +348,15 @@ public sealed class HarnessService : IDisposable
 
     public void OpenWebInterface()
     {
-        var webUrl = WebUrl;
-        if (State != HarnessState.Running || webUrl is null)
+        var browserUrl = BrowserLaunchUrl ?? WebUrl;
+        if (State != HarnessState.Running || browserUrl is null)
         {
             return;
         }
 
         Process.Start(new ProcessStartInfo
         {
-            FileName = webUrl,
+            FileName = browserUrl,
             UseShellExecute = true
         });
     }
@@ -355,7 +369,12 @@ public sealed class HarnessService : IDisposable
         webUrl = string.Empty;
         var store = new RuntimeEndpointStore();
 
-        if (!store.TryRead(out var launcherPid, out var port))
+        if (!store.TryRead(
+                out var launcherPid,
+                out var launcherStartTimeUtcTicks,
+                out var port,
+                out var requiresAuthenticatedHandoff) ||
+            requiresAuthenticatedHandoff)
         {
             return false;
         }
@@ -363,7 +382,8 @@ public sealed class HarnessService : IDisposable
         try
         {
             using var process = Process.GetProcessById(launcherPid);
-            if (process.HasExited)
+            if (process.HasExited ||
+                process.StartTime.ToUniversalTime().Ticks != launcherStartTimeUtcTicks)
             {
                 return false;
             }
@@ -459,23 +479,25 @@ public sealed class HarnessService : IDisposable
             return;
         }
 
-        AppendLine(isError ? _harnessErrorLog : _harnessLog, line);
-
-        if (HarnessEndpoint.TryParseStartupPort(line, out var announcedPort))
+        var logLine = HarnessEndpoint.RedactSensitiveValues(line);
+        if (HarnessEndpoint.TryParseStartupAnnouncement(line, out var announcement))
         {
-            if (_requestedWebPort == 0)
+            logLine = announcement.SanitizedLogLine;
+
+            if (_requestedWebPort != 0 && announcement.Port != _requestedWebPort)
             {
-                _dynamicPortSource?.TrySetResult(announcedPort);
+                _startupAnnouncementSource?.TrySetException(
+                    new InvalidOperationException(
+                        $"Harness announced port {announcement.Port}, but port {_requestedWebPort} was requested."));
             }
-            else if (announcedPort != _requestedWebPort)
+            else
             {
-                LogLauncher(
-                    $"Harness announced port {announcedPort}, but port {_requestedWebPort} was requested. " +
-                    "Readiness will continue to use the requested port.");
+                _startupAnnouncementSource?.TrySetResult(announcement);
             }
         }
 
-        ProcessLogLine(line);
+        AppendLine(isError ? _harnessErrorLog : _harnessLog, logLine);
+        ProcessLogLine(logLine);
     }
 
     private void HandleUnexpectedProcessExit()
@@ -488,8 +510,8 @@ public sealed class HarnessService : IDisposable
         var exitCode = SafeExitCode(_process);
         var message = $"Harness process exited unexpectedly with code {exitCode}.";
         LogLauncher(message);
-        _dynamicPortSource?.TrySetException(new InvalidOperationException(message));
-        SetActiveWebPort(null);
+        _startupAnnouncementSource?.TrySetException(new InvalidOperationException(message));
+        SetActiveEndpoint(null, null);
         _runtimeEndpointStore.Clear();
         SetState(exitCode == 0 ? HarnessState.Stopped : HarnessState.Failed);
     }
@@ -506,8 +528,8 @@ public sealed class HarnessService : IDisposable
         {
             try { _process?.Dispose(); } catch { }
             _process = null;
-            _dynamicPortSource = null;
-            SetActiveWebPort(null);
+            _startupAnnouncementSource = null;
+            SetActiveEndpoint(null, null);
             _runtimeEndpointStore.Clear();
             _stopping = false;
             SetState(HarnessState.Failed);
@@ -519,17 +541,36 @@ public sealed class HarnessService : IDisposable
         var actionName = isUpdate ? "Updating" : "Installing";
         LogLauncher($"{actionName} DeepSeek Harness globally via npm.");
 
+        if (!isUpdate)
+        {
+            SetState(HarnessState.Starting);
+        }
+
+        UpdateStatusMessage(
+            isUpdate ? "Checking latest version..." : "Resolving install version...");
+
+        var exactVersion = await ResolveLatestVersionAsync();
+        var installedRuntime = ResolveDshRuntime();
+        var installedVersion = installedRuntime?.Version;
+
+        LogLauncher(
+            installedVersion is null
+                ? $"Resolved {PackageName} target version: {exactVersion}."
+                : $"Installed {PackageName} version: {installedVersion}; target version: {exactVersion}.");
+
+        if (isUpdate && string.Equals(installedVersion, exactVersion, StringComparison.Ordinal))
+        {
+            LogLauncher($"DeepSeek Harness is already up to date at {exactVersion}; npm install skipped.");
+            UpdateStatusMessage(State == HarnessState.Running ? "Running" : $"Already up to date ({exactVersion})");
+            return;
+        }
+
         if (_process is { HasExited: false })
         {
             await StopAsync();
         }
 
         SetState(HarnessState.Starting);
-        UpdateStatusMessage(
-            isUpdate ? "Checking latest version..." : "Resolving install version...");
-
-        var exactVersion = await ResolveLatestVersionAsync();
-        LogLauncher($"Resolved {PackageName} target version: {exactVersion}.");
         UpdateStatusMessage(
             isUpdate ? $"Updating to {exactVersion}..." : $"Installing {exactVersion}...");
 
@@ -600,8 +641,7 @@ public sealed class HarnessService : IDisposable
             if (root.ValueKind == JsonValueKind.String)
             {
                 var value = root.GetString();
-                if (!string.IsNullOrWhiteSpace(value) &&
-                    PackageVersionPattern.IsMatch(value))
+                if (!string.IsNullOrWhiteSpace(value) && PackageVersionPattern.IsMatch(value))
                 {
                     return value;
                 }
@@ -626,8 +666,7 @@ public sealed class HarnessService : IDisposable
                         value = latestProperty.GetString();
                     }
 
-                    if (string.IsNullOrWhiteSpace(value) ||
-                        !PackageVersionPattern.IsMatch(value))
+                    if (string.IsNullOrWhiteSpace(value) || !PackageVersionPattern.IsMatch(value))
                     {
                         continue;
                     }
@@ -649,8 +688,7 @@ public sealed class HarnessService : IDisposable
                 objectLatest.ValueKind == JsonValueKind.String)
             {
                 var value = objectLatest.GetString();
-                if (!string.IsNullOrWhiteSpace(value) &&
-                    PackageVersionPattern.IsMatch(value))
+                if (!string.IsNullOrWhiteSpace(value) && PackageVersionPattern.IsMatch(value))
                 {
                     return value;
                 }
@@ -661,23 +699,19 @@ public sealed class HarnessService : IDisposable
             // Fall back to line-by-line text parsing for npm variants that emit plain text.
         }
 
-        var lines = output.Split(
-            new[] { '\r', '\n' },
-            StringSplitOptions.RemoveEmptyEntries);
-
+        var lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
         string? textMatch = null;
+
         foreach (var line in lines)
         {
             var cleaned = line.Trim().Trim('"', '\'', '[', ']', ',');
 
-            if (string.IsNullOrWhiteSpace(cleaned) ||
-                !PackageVersionPattern.IsMatch(cleaned))
+            if (string.IsNullOrWhiteSpace(cleaned) || !PackageVersionPattern.IsMatch(cleaned))
             {
                 continue;
             }
 
-            if (textMatch is not null &&
-                !string.Equals(textMatch, cleaned, StringComparison.Ordinal))
+            if (textMatch is not null && !string.Equals(textMatch, cleaned, StringComparison.Ordinal))
             {
                 return null;
             }
@@ -704,11 +738,9 @@ public sealed class HarnessService : IDisposable
         return version;
     }
 
-    private static (string NodeExe, string Entrypoint)? ResolveDshRuntime()
+    private static DshRuntime? ResolveDshRuntime()
     {
-        var nodeExe = FirstExistingPath(
-            RunStaticCommand("where.exe node.exe", TimeSpan.FromSeconds(3)));
-
+        var nodeExe = FirstExistingPath(RunStaticCommand("where.exe node.exe", TimeSpan.FromSeconds(3)));
         if (nodeExe is null)
         {
             return null;
@@ -724,8 +756,7 @@ public sealed class HarnessService : IDisposable
             return null;
         }
 
-        var packageDirectory = Path.GetFullPath(
-            Path.Combine(npmRoot, "@deepseek-ai", "dsh"));
+        var packageDirectory = Path.GetFullPath(Path.Combine(npmRoot, "@deepseek-ai", "dsh"));
         var packageJsonPath = Path.Combine(packageDirectory, "package.json");
 
         if (!File.Exists(packageJsonPath))
@@ -757,21 +788,26 @@ public sealed class HarnessService : IDisposable
             return null;
         }
 
-        var entrypoint = Path.GetFullPath(
-            Path.Combine(packageDirectory, relativeEntrypoint));
-        var packagePrefix =
-            packageDirectory.TrimEnd(Path.DirectorySeparatorChar) +
-            Path.DirectorySeparatorChar;
+        var entrypoint = Path.GetFullPath(Path.Combine(packageDirectory, relativeEntrypoint));
+        var packagePrefix = packageDirectory.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
 
-        if (!entrypoint.StartsWith(
-                packagePrefix,
-                StringComparison.OrdinalIgnoreCase) ||
-            !File.Exists(entrypoint))
+        if (!entrypoint.StartsWith(packagePrefix, StringComparison.OrdinalIgnoreCase) || !File.Exists(entrypoint))
         {
             return null;
         }
 
-        return (nodeExe, entrypoint);
+        string? version = null;
+        if (document.RootElement.TryGetProperty("version", out var versionElement) &&
+            versionElement.ValueKind == JsonValueKind.String)
+        {
+            var candidate = versionElement.GetString();
+            if (!string.IsNullOrWhiteSpace(candidate) && PackageVersionPattern.IsMatch(candidate))
+            {
+                version = candidate;
+            }
+        }
+
+        return new DshRuntime(nodeExe, entrypoint, version);
     }
 
     private static string? FirstExistingPath(string output) => output
@@ -798,9 +834,7 @@ public sealed class HarnessService : IDisposable
         return process.StandardOutput.ReadToEnd();
     }
 
-    private static async Task<string> RunStaticCommandAsync(
-        string command,
-        TimeSpan timeout)
+    private static async Task<string> RunStaticCommandAsync(string command, TimeSpan timeout)
     {
         using var process = CreateShellProcess(command, redirectOutput: true);
         process.Start();
@@ -829,9 +863,7 @@ public sealed class HarnessService : IDisposable
         return stdout;
     }
 
-    private static Process CreateShellProcess(
-        string command,
-        bool redirectOutput)
+    private static Process CreateShellProcess(string command, bool redirectOutput)
     {
         var shell = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
 
@@ -872,37 +904,28 @@ public sealed class HarnessService : IDisposable
 
     private async Task MonitorUntilReadyAsync(
         bool openBrowserWhenReady,
-        int requestedPort,
         CancellationToken cancellationToken)
     {
-        var port = requestedPort;
+        var source = _startupAnnouncementSource
+            ?? throw new InvalidOperationException("Harness startup announcement tracking was not initialized.");
 
-        if (port == 0)
+        HarnessStartupAnnouncement announcement;
+        try
         {
-            UpdateStatusMessage("Waiting for an available port...");
-            var source = _dynamicPortSource
-                ?? throw new InvalidOperationException(
-                    "Dynamic port discovery was not initialized.");
-
-            try
-            {
-                port = await source.Task.WaitAsync(
-                    DynamicPortDiscoveryTimeout,
-                    cancellationToken);
-            }
-            catch (TimeoutException)
-            {
-                UpdateStatusMessage("Could not determine assigned port");
-                throw new TimeoutException(
-                    "DeepSeek Harness did not announce its OS-assigned loopback port within 45 seconds. " +
-                    "Startup was aborted without touching the process that owns port 3080.");
-            }
-
-            SetActiveWebPort(port);
-            LogLauncher($"Harness announced OS-assigned loopback port {port}.");
+            announcement = await source.Task.WaitAsync(StartupAnnouncementTimeout, cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            UpdateStatusMessage("Could not verify Harness startup");
+            throw new TimeoutException(
+                "DeepSeek Harness did not announce its validated loopback startup URL within 45 seconds. " +
+                "Startup was aborted without touching unrelated processes.");
         }
 
-        var webUrl = HarnessEndpoint.BuildWebUrl(port);
+        SetActiveEndpoint(announcement.Port, announcement.BrowserUrl);
+        LogLauncher($"Harness announced validated loopback port {announcement.Port}.");
+
+        var webUrl = HarnessEndpoint.BuildWebUrl(announcement.Port);
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -913,24 +936,26 @@ public sealed class HarnessService : IDisposable
 
             try
             {
-                using var response = await _httpClient.GetAsync(
-                    webUrl,
-                    cancellationToken);
+                using var response = await _httpClient.GetAsync(webUrl, cancellationToken);
+                var statusCode = (int)response.StatusCode;
 
-                if ((int)response.StatusCode is >= 200 and < 400)
+                // The process-specific startup announcement proves this listener is DSH. A 401/403 is
+                // therefore a valid ready state for newer DSH builds that require browser authentication.
+                if (statusCode is >= 200 and < 500)
                 {
-                    SetActiveWebPort(port);
-                    PublishRuntimeEndpoint(port);
+                    PublishRuntimeEndpoint(
+                        announcement.Port,
+                        announcement.RequiresAuthenticatedHandoff);
                     SetState(HarnessState.Running);
 
-                    if (port != HarnessEndpoint.PreferredPort)
+                    if (announcement.Port != HarnessEndpoint.PreferredPort)
                     {
-                        UpdateStatusMessage($"Running on port {port}");
+                        UpdateStatusMessage($"Running on port {announcement.Port}");
                     }
 
                     LogLauncher(
-                        $"Harness HTTP readiness confirmed on loopback port {port} " +
-                        $"with status {(int)response.StatusCode}.");
+                        $"Harness HTTP readiness confirmed on loopback port {announcement.Port} " +
+                        $"with status {statusCode}.");
 
                     if (openBrowserWhenReady)
                     {
@@ -940,14 +965,13 @@ public sealed class HarnessService : IDisposable
                     return;
                 }
             }
-            catch (OperationCanceledException)
-                when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 return;
             }
             catch
             {
-                // Harness is still starting.
+                // Harness is still starting or temporarily unavailable.
             }
 
             try
@@ -961,11 +985,15 @@ public sealed class HarnessService : IDisposable
         }
     }
 
-    private void PublishRuntimeEndpoint(int port)
+    private void PublishRuntimeEndpoint(int port, bool requiresAuthenticatedHandoff)
     {
         try
         {
-            _runtimeEndpointStore.Publish(Environment.ProcessId, port);
+            _runtimeEndpointStore.Publish(
+                Environment.ProcessId,
+                _launcherStartTimeUtcTicks,
+                port,
+                requiresAuthenticatedHandoff);
         }
         catch (Exception ex) when (
             ex is IOException or
@@ -977,11 +1005,12 @@ public sealed class HarnessService : IDisposable
         }
     }
 
-    private void SetActiveWebPort(int? port)
+    private void SetActiveEndpoint(int? port, string? browserLaunchUrl)
     {
         lock (_endpointLock)
         {
             _activeWebPort = port;
+            _browserLaunchUrl = browserLaunchUrl;
         }
     }
 
@@ -1013,8 +1042,7 @@ public sealed class HarnessService : IDisposable
             if (!process.HasExited)
             {
                 process.Kill(entireProcessTree: true);
-                using var cancellation =
-                    new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                 await process.WaitForExitAsync(cancellation.Token);
             }
         }
@@ -1068,16 +1096,34 @@ public sealed class HarnessService : IDisposable
     }
 
     private void LogLauncher(string message) =>
-        AppendLine(
-            _launcherLog,
-            $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}");
+        AppendLine(_launcherLog, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}");
 
     private void AppendLine(string path, string text)
     {
         lock (_logLock)
         {
-            File.AppendAllText(path, text + Environment.NewLine);
+            try
+            {
+                RotateLogIfNeeded(path);
+                File.AppendAllText(
+                    path,
+                    HarnessEndpoint.RedactSensitiveValues(text) + Environment.NewLine);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Logging must never take down the supervised process or update workflow.
+            }
         }
+    }
+
+    private static void RotateLogIfNeeded(string path)
+    {
+        if (!File.Exists(path) || new FileInfo(path).Length < MaximumLogBytes)
+        {
+            return;
+        }
+
+        File.Move(path, path + ".1", overwrite: true);
     }
 
     private static int SafeExitCode(Process? process)
@@ -1092,8 +1138,7 @@ public sealed class HarnessService : IDisposable
         }
     }
 
-    private void ThrowIfDisposed() =>
-        ObjectDisposedException.ThrowIf(_disposed, this);
+    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
 
     public void Dispose()
     {
@@ -1105,7 +1150,7 @@ public sealed class HarnessService : IDisposable
         _disposed = true;
         _monitorCts?.Cancel();
         _monitorCts?.Dispose();
-        _dynamicPortSource?.TrySetCanceled();
+        _startupAnnouncementSource?.TrySetCanceled();
         _runtimeEndpointStore.Clear();
 
         try
@@ -1131,4 +1176,9 @@ public sealed class HarnessService : IDisposable
         _actionLock.Dispose();
         LogLauncher("WPF launcher stopped.");
     }
+
+    private sealed record DshRuntime(
+        string NodeExe,
+        string Entrypoint,
+        string? Version);
 }
