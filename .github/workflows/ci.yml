@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Restore app
+        run: dotnet restore src/DSHLauncher/DSHLauncher.csproj
+      - name: Restore tests
+        run: dotnet restore tests/DSHLauncher.Tests/DSHLauncher.Tests.csproj
+      - name: Build
+        run: dotnet build src/DSHLauncher/DSHLauncher.csproj -c Release --no-restore
+      - name: Test
+        run: dotnet test tests/DSHLauncher.Tests/DSHLauncher.Tests.csproj -c Release --no-restore --logger "trx;LogFileName=test-results.trx" --collect:"XPlat Code Coverage"
+      - name: Publish
+        run: dotnet publish src/DSHLauncher/DSHLauncher.csproj -c Release -r win-x64 --self-contained true --no-restore -o artifacts/publish
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: tests/DSHLauncher.Tests/TestResults/**
+          retention-days: 5
+      - name: Upload publish smoke artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-launcher-win-x64
+          path: artifacts/publish/**
+          retention-days: 5

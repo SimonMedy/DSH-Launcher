@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using System.IO;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -23,55 +23,90 @@ public sealed class ConfigService
     };
 
     private readonly string _configPath;
-
     public string ConfigPath => _configPath;
+    public string? LastLoadWarning { get; private set; }
 
-    public ConfigService()
+    public ConfigService(string? configPath = null)
     {
-        var appData = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "DeepSeekHarness");
+        if (!string.IsNullOrWhiteSpace(configPath))
+        {
+            _configPath = Path.GetFullPath(configPath);
+            Directory.CreateDirectory(Path.GetDirectoryName(_configPath)!);
+            return;
+        }
 
+        var appData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DeepSeekHarness");
         Directory.CreateDirectory(appData);
         _configPath = Path.Combine(appData, "config.json");
     }
 
     public LauncherConfig Load()
     {
-        try
+        LastLoadWarning = null;
+        if (!File.Exists(_configPath))
         {
-            if (File.Exists(_configPath))
-            {
-                var json = File.ReadAllText(_configPath);
-                var config = JsonSerializer.Deserialize<LauncherConfig>(json, JsonOptions);
-                if (config is not null)
-                {
-                    config.TrustedHosts ??= new List<string>();
-                    return config;
-                }
-            }
-        }
-        catch
-        {
-            // Fallback to default on error
+            return new LauncherConfig();
         }
 
-        var defaultConfig = new LauncherConfig();
-        Save(defaultConfig);
-        return defaultConfig;
+        try
+        {
+            var json = File.ReadAllText(_configPath);
+            var config = JsonSerializer.Deserialize<LauncherConfig>(json, JsonOptions)
+                         ?? throw new InvalidDataException("Configuration deserialized to null.");
+            config.TrustedHosts ??= new List<string>();
+            return config;
+        }
+        catch (Exception ex)
+        {
+            var corruptPath = $"{_configPath}.corrupt.{DateTime.UtcNow:yyyyMMddHHmmssfff}.json";
+            try
+            {
+                File.Move(_configPath, corruptPath, overwrite: false);
+                LastLoadWarning = $"The configuration was invalid and has been preserved as {Path.GetFileName(corruptPath)}. Defaults are being used. ({ex.Message})";
+            }
+            catch (Exception preserveException)
+            {
+                LastLoadWarning = $"The configuration could not be read and could not be preserved. Defaults are being used. ({ex.Message}; preserve failed: {preserveException.Message})";
+            }
+
+            return new LauncherConfig();
+        }
     }
 
     public void Save(LauncherConfig config)
     {
+        ArgumentNullException.ThrowIfNull(config);
+        config.TrustedHosts ??= new List<string>();
+
+        var directory = Path.GetDirectoryName(_configPath)!;
+        Directory.CreateDirectory(directory);
+        var tempPath = Path.Combine(directory, $".{Path.GetFileName(_configPath)}.{Guid.NewGuid():N}.tmp");
+        var json = JsonSerializer.Serialize(config, JsonOptions);
+
         try
         {
-            config.TrustedHosts ??= new List<string>();
-            var json = JsonSerializer.Serialize(config, JsonOptions);
-            File.WriteAllText(_configPath, json);
+            using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+            using (var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+            {
+                writer.Write(json);
+                writer.Flush();
+                stream.Flush(flushToDisk: true);
+            }
+
+            _ = JsonSerializer.Deserialize<LauncherConfig>(File.ReadAllText(tempPath), JsonOptions)
+                ?? throw new InvalidDataException("Saved configuration failed validation.");
+            File.Move(tempPath, _configPath, overwrite: true);
         }
-        catch
+        finally
         {
-            // Ignore write errors
+            try
+            {
+                if (File.Exists(tempPath)) File.Delete(tempPath);
+            }
+            catch
+            {
+                // Best-effort temporary-file cleanup only.
+            }
         }
     }
 
@@ -82,17 +117,6 @@ public sealed class ConfigService
             Save(new LauncherConfig());
         }
 
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = _configPath,
-                UseShellExecute = true
-            });
-        }
-        catch
-        {
-            // Ignore open error
-        }
+        Process.Start(new ProcessStartInfo { FileName = _configPath, UseShellExecute = true });
     }
 }

@@ -1,4 +1,3 @@
-using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Input;
@@ -18,68 +17,66 @@ public partial class SettingsWindow : Window
         InitializeComponent();
         _configService = configService;
         _config = _configService.Load();
-
         LoadHighResIcon();
 
-        ContentGrid.SizeChanged += (_, _) =>
-        {
-            ContentGrid.Clip = new RectangleGeometry(
-                new Rect(0, 0, ContentGrid.ActualWidth, ContentGrid.ActualHeight),
-                18, 18);
-        };
-
+        ContentGrid.SizeChanged += (_, _) => ContentGrid.Clip = new RectangleGeometry(new Rect(0, 0, ContentGrid.ActualWidth, ContentGrid.ActualHeight), 18, 18);
         PopulateFields();
+
+        if (_configService.LastLoadWarning is not null)
+        {
+            MessageBox.Show(this, _configService.LastLoadWarning, "Configuration recovered", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private void PopulateFields()
     {
-        if (_config.TrustedHosts is { Count: > 0 })
-        {
-            TrustedHostsTextBox.Text = string.Join(Environment.NewLine, _config.TrustedHosts);
-        }
-        else
-        {
-            TrustedHostsTextBox.Text = string.Empty;
-        }
-
+        TrustedHostsTextBox.Text = _config.TrustedHosts is { Count: > 0 } ? string.Join(Environment.NewLine, _config.TrustedHosts) : string.Empty;
         CustomArgsTextBox.Text = _config.CustomArgs ?? string.Empty;
     }
 
     private void Window_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ButtonState == MouseButtonState.Pressed)
-        {
-            DragMove();
-        }
+        if (e.ButtonState == MouseButtonState.Pressed) DragMove();
     }
 
     private void SaveButton_Click(object sender, RoutedEventArgs e)
     {
-        var rawHosts = TrustedHostsTextBox.Text
-            .Split(new[] { "\r\n", "\r", "\n", ",", ";", " " }, StringSplitOptions.RemoveEmptyEntries)
-            .Select(h => h.Trim())
-            .Where(h => !string.IsNullOrWhiteSpace(h) && !h.StartsWith("#"))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        try
+        {
+            var normalizedHosts = new List<string>();
+            var rawHosts = TrustedHostsTextBox.Text
+                .Split(new[] { "\r\n", "\r", "\n", ",", ";", " " }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(h => h.Trim())
+                .Where(h => !string.IsNullOrWhiteSpace(h) && !h.StartsWith('#'));
 
-        _config.TrustedHosts = rawHosts;
-        _config.CustomArgs = CustomArgsTextBox.Text.Trim();
+            foreach (var rawHost in rawHosts)
+            {
+                if (!TrustedAuthority.TryNormalize(rawHost, out var authority, out var error))
+                    throw new InvalidOperationException($"Invalid trusted authority '{rawHost}': {error}");
+                if (!normalizedHosts.Contains(authority, StringComparer.OrdinalIgnoreCase)) normalizedHosts.Add(authority);
+            }
 
-        _configService.Save(_config);
+            var customArgs = CustomArgsTextBox.Text.Trim();
+            _ = WindowsCommandLine.ParseAdditionalArguments(customArgs);
 
-        DialogResult = true;
-        Close();
+            _config.TrustedHosts = normalizedHosts;
+            _config.CustomArgs = customArgs;
+            _configService.Save(_config);
+            DialogResult = true;
+            Close();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Settings were not saved", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
-    private void CancelButton_Click(object sender, RoutedEventArgs e)
-    {
-        DialogResult = false;
-        Close();
-    }
+    private void CancelButton_Click(object sender, RoutedEventArgs e) { DialogResult = false; Close(); }
 
     private void OpenConfigFileButton_Click(object sender, RoutedEventArgs e)
     {
-        _configService.OpenConfigFile();
+        try { _configService.OpenConfigFile(); }
+        catch (Exception ex) { MessageBox.Show(this, ex.Message, "Unable to open config.json", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
 
     private void LoadHighResIcon()
@@ -89,14 +86,8 @@ public partial class SettingsWindow : Window
             var uri = new Uri("pack://application:,,,/DeepSeekHarness.ico", UriKind.Absolute);
             var decoder = new IconBitmapDecoder(uri, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
             var highResFrame = decoder.Frames.OrderByDescending(f => f.PixelWidth).FirstOrDefault();
-            if (highResFrame is not null)
-            {
-                AppIconImage.Source = highResFrame;
-            }
+            if (highResFrame is not null) AppIconImage.Source = highResFrame;
         }
-        catch
-        {
-            // Keep fallback
-        }
+        catch { }
     }
 }
