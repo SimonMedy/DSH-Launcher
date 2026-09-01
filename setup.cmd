@@ -51,20 +51,7 @@ if not exist "%EXE%" (
     exit /b 1
 )
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ErrorActionPreference='Stop';" ^
-  "$desktop=[Environment]::GetFolderPath('Desktop');" ^
-  "$target='%EXE%';" ^
-  "$shortcutPath=Join-Path $desktop 'DeepSeek Harness.lnk';" ^
-  "$shell=New-Object -ComObject WScript.Shell;" ^
-  "$shortcut=$shell.CreateShortcut($shortcutPath);" ^
-  "$shortcut.TargetPath=$target;" ^
-  "$shortcut.WorkingDirectory=Split-Path $target -Parent;" ^
-  "$shortcut.IconLocation=$target + ',0';" ^
-  "$shortcut.Description='DSH Launcher for DeepSeek Harness';" ^
-  "$shortcut.Save();" ^
-  "Write-Host ''; Write-Host 'Shortcut created:' -ForegroundColor Green; Write-Host $shortcutPath;"
-
+powershell.exe -NoProfile -Command "& { param([string]$Target); $ErrorActionPreference='Stop'; $desktop=[Environment]::GetFolderPath('Desktop'); $shortcutPath=Join-Path $desktop 'DeepSeek Harness.lnk'; $shell=New-Object -ComObject WScript.Shell; $shortcut=$shell.CreateShortcut($shortcutPath); $shortcut.TargetPath=$Target; $shortcut.WorkingDirectory=Split-Path $Target -Parent; $shortcut.IconLocation=$Target + ',0'; $shortcut.Description='DSH Launcher for DeepSeek Harness'; $shortcut.Save(); Write-Host ''; Write-Host 'Shortcut created:' -ForegroundColor Green; Write-Host $shortcutPath }" "%EXE%"
 if errorlevel 1 (
     echo.
     echo Shortcut creation failed.

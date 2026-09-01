@@ -20,6 +20,8 @@ public partial class SettingsWindow : Window
         LoadHighResIcon();
 
         ContentGrid.SizeChanged += (_, _) => ContentGrid.Clip = new RectangleGeometry(new Rect(0, 0, ContentGrid.ActualWidth, ContentGrid.ActualHeight), 18, 18);
+        TrustedHostsTextBox.ToolTip = "Accepted DSH Web authorities only. This is not authentication and does not expose Harness to the network. Use a trusted network layer such as Tailscale/WireGuard or an authenticated reverse proxy.";
+        CustomArgsTextBox.ToolTip = "Arguments are tokenized and passed directly to DSH without shell interpretation. --host, --trusted-host and --port are managed by the launcher. Do not put secrets on command lines.";
         PopulateFields();
 
         if (_configService.LastLoadWarning is not null)
